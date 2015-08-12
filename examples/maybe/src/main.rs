@@ -5,10 +5,6 @@ trait Something {
     fn print(&self);
 }
 
-impl Something for Option<u32> {
-    fn print(&self) { println!("{:?}", self); }
-}
-
 impl Something for str {
     fn print(&self) { println!("{}", self); }
 }
