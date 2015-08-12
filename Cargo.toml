@@ -2,3 +2,6 @@
 name = "abseil"
 version = "0.1.0"
 authors = ["J/A <archer884@gmail.com>"]
+description = "Convenient fallback behavior for Rust result and option types"
+homepage = "https://github.com/archer884/abseil"
+repository = "https://github.com/archer884/abseil"
