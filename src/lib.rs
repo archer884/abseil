@@ -113,6 +113,10 @@ impl fmt::Display for Persist {
 pub struct PersistBuilder(Persist);
 
 impl PersistBuilder {
+    pub fn build(self) -> Persist {
+        self.0
+    }
+    
     pub fn with_qualifier(self, qualifier: impl Into<String>) -> Self {
         PersistBuilder(Persist {
             qualifier: Some(qualifier.into()),
