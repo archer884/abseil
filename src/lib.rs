@@ -2,8 +2,7 @@ use std::{fmt, fs, io};
 
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
-
-pub use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
