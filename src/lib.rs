@@ -128,8 +128,8 @@ impl PersistBuilder {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Abseil<T> {
-    timestamp: DateTime<Utc>,
-    state: T,
+    pub timestamp: DateTime<Utc>,
+    pub state: T,
 }
 
 impl<T> Abseil<T> {
@@ -138,5 +138,9 @@ impl<T> Abseil<T> {
             timestamp: Utc::now(),
             state,
         }
+    }
+
+    pub fn into_inner(self) -> T {
+        self.state
     }
 }
