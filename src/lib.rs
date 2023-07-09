@@ -78,7 +78,13 @@ impl Persist {
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let location = self.location()?;
-        let path = location.config_dir().join("persist.json");
+        let dir = location.config_dir();
+
+        if !dir.exists() {
+            fs::create_dir_all(dir)?;
+        }
+
+        let path = dir.join("persist.json");
         let text = serde_json::to_string_pretty(&Abseil::new(state))?;
         Ok(fs::write(path, text)?)
     }
