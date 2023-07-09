@@ -61,10 +61,15 @@ impl Persist {
 
     pub fn load<T>(&self) -> Result<Abseil<T>>
     where
-        T: for<'a> Deserialize<'a>,
+        T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
         let path = location.config_dir().join("persist.json");
+
+        if !path.exists() {
+            return Ok(Abseil::new(Default::default()));
+        }
+
         let text = fs::read_to_string(path)?;
         Ok(serde_json::from_str(&text)?)
     }
