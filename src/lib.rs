@@ -13,6 +13,15 @@ pub enum Error {
     Json(serde_json::Error),
 }
 
+impl From<Error> for io::Error {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::IO(e) => e,
+            e => io::Error::other(e),
+        }
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(value: io::Error) -> Self {
         Error::IO(value)
