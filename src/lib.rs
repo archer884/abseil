@@ -51,6 +51,7 @@ pub struct Persist {
     qualifier: Option<String>,
     organization: Option<String>,
     application: String,
+    pretty: bool,
 }
 
 impl Persist {
@@ -59,6 +60,7 @@ impl Persist {
             qualifier: None,
             organization: None,
             application: application.into(),
+            pretty: true,
         }
     }
 
@@ -67,6 +69,7 @@ impl Persist {
             qualifier: None,
             organization: None,
             application: application.into(),
+            pretty: true,
         })
     }
 
@@ -94,8 +97,16 @@ impl Persist {
         }
 
         let path = dir.join("persist.json");
-        let text = serde_json::to_string_pretty(&Abseil::new(state))?;
+        let text = self.stringify(state)?;
         Ok(fs::write(path, text)?)
+    }
+
+    fn stringify(&self, state: impl Serialize) -> serde_json::Result<String> {
+        if self.pretty {
+            serde_json::to_string_pretty(&Abseil::new(state))
+        } else {
+            serde_json::to_string(&Abseil::new(state))
+        }
     }
 
     fn location(&self) -> Result<ProjectDirs> {
@@ -131,17 +142,25 @@ impl PersistBuilder {
     pub fn build(self) -> Persist {
         self.0
     }
-    
+
     pub fn with_qualifier(self, qualifier: impl Into<String>) -> Self {
-        PersistBuilder(Persist {
+        Self(Persist {
             qualifier: Some(qualifier.into()),
             ..self.0
         })
     }
 
     pub fn with_organization(self, organization: impl Into<String>) -> Self {
-        PersistBuilder(Persist {
+        Self(Persist {
             organization: Some(organization.into()),
+            ..self.0
+        })
+    }
+
+    /// Instruct [`Persist`] to use compact json format.
+    pub fn compact(self) -> Self {
+        Self(Persist {
+            pretty: false,
             ..self.0
         })
     }
