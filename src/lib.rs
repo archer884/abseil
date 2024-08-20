@@ -10,7 +10,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     AppData(Persist),
     IO(io::Error),
-    Json(serde_json::Error),
+    Serialization(stringify::Error),
 }
 
 impl From<Error> for io::Error {
@@ -28,9 +28,9 @@ impl From<io::Error> for Error {
     }
 }
 
-impl From<serde_json::Error> for Error {
-    fn from(value: serde_json::Error) -> Self {
-        Error::Json(value)
+impl From<stringify::Error> for Error {
+    fn from(value: stringify::Error) -> Self {
+        Error::Serialization(value)
     }
 }
 
@@ -39,7 +39,7 @@ impl fmt::Display for Error {
         match self {
             Error::AppData(persist) => write!(f, "unable to open storage for {persist}"),
             Error::IO(e) => e.fmt(f),
-            Error::Json(e) => e.fmt(f),
+            Error::Serialization(e) => e.fmt(f),
         }
     }
 }
@@ -85,7 +85,7 @@ impl Persist {
         }
 
         let text = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&text)?)
+        Ok(stringify::from_str(&text)?)
     }
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
@@ -101,11 +101,11 @@ impl Persist {
         Ok(fs::write(path, text)?)
     }
 
-    fn stringify(&self, state: impl Serialize) -> serde_json::Result<String> {
+    fn stringify(&self, state: impl Serialize) -> stringify::Result<String> {
         if self.pretty {
-            serde_json::to_string_pretty(&Abseil::new(state))
+            stringify::to_string_pretty(&Abseil::new(state))
         } else {
-            serde_json::to_string(&Abseil::new(state))
+            stringify::to_string(&Abseil::new(state))
         }
     }
 
@@ -182,5 +182,60 @@ impl<T> Abseil<T> {
 
     pub fn into_inner(self) -> T {
         self.state
+    }
+}
+
+#[cfg(feature = "json")]
+mod stringify {
+    use serde::{Deserialize, Serialize};
+
+    pub type Result<T> = serde_json::Result<T>;
+
+    pub type Error = serde_json::Error;
+
+    pub fn to_string(value: &impl Serialize) -> Result<String> {
+        serde_json::to_string(value)
+    }
+
+    pub fn to_string_pretty(value: &impl Serialize) -> Result<String> {
+        serde_json::to_string_pretty(value)
+    }
+
+    pub fn from_str<'a, T: Deserialize<'a>>(s: &'a str) -> Result<T> {
+        serde_json::from_str(s)
+    }
+}
+
+#[cfg(all(feature = "toml", not(feature = "json")))]
+mod stringify {
+    use core::fmt;
+
+    use either::Either;
+    use serde::{de::DeserializeOwned, Serialize};
+
+    pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+    #[derive(Debug)]
+    pub struct Error(Either<toml::de::Error, toml::ser::Error>);
+
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match &self.0 {
+                Either::Left(e) => e.fmt(f),
+                Either::Right(e) => e.fmt(f),
+            }
+        }
+    }
+
+    pub fn to_string(value: &impl Serialize) -> Result<String> {
+        toml::to_string(value).map_err(|e| Error(Either::Right(e)))
+    }
+
+    pub fn to_string_pretty(value: &impl Serialize) -> Result<String> {
+        toml::to_string_pretty(value).map_err(|e| Error(Either::Right(e)))
+    }
+
+    pub fn from_str<T: DeserializeOwned>(s: &str) -> Result<T> {
+        toml::from_str(s).map_err(|e| Error(Either::Left(e)))
     }
 }
