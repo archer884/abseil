@@ -1,6 +1,6 @@
 [package]
 name = "abseil"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "An easy app storage provider."
 homepage = "https://github.com/archer884/abseil"

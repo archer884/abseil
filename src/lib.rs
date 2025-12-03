@@ -8,7 +8,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Debug)]
 pub enum Error {
-    AppData(Persist),
+    AppData(Provider),
     IO(io::Error),
     Serialization(stringify::Error),
 }
@@ -47,14 +47,14 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 #[derive(Debug, Clone)]
-pub struct Persist {
+pub struct Provider {
     qualifier: Option<String>,
     organization: Option<String>,
     application: String,
     pretty: bool,
 }
 
-impl Persist {
+impl Provider {
     pub fn new(application: impl Into<String>) -> Self {
         Self {
             qualifier: None,
@@ -65,7 +65,7 @@ impl Persist {
     }
 
     pub fn builder(application: impl Into<String>) -> PersistBuilder {
-        PersistBuilder(Persist {
+        PersistBuilder(Provider {
             qualifier: None,
             organization: None,
             application: application.into(),
@@ -119,7 +119,7 @@ impl Persist {
     }
 }
 
-impl fmt::Display for Persist {
+impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(qualifier) = &self.qualifier {
             f.write_str(qualifier)?;
@@ -136,22 +136,22 @@ impl fmt::Display for Persist {
 }
 
 #[derive(Debug)]
-pub struct PersistBuilder(Persist);
+pub struct PersistBuilder(Provider);
 
 impl PersistBuilder {
-    pub fn build(self) -> Persist {
+    pub fn build(self) -> Provider {
         self.0
     }
 
     pub fn with_qualifier(self, qualifier: impl Into<String>) -> Self {
-        Self(Persist {
+        Self(Provider {
             qualifier: Some(qualifier.into()),
             ..self.0
         })
     }
 
     pub fn with_organization(self, organization: impl Into<String>) -> Self {
-        Self(Persist {
+        Self(Provider {
             organization: Some(organization.into()),
             ..self.0
         })
@@ -159,7 +159,7 @@ impl PersistBuilder {
 
     /// Instruct [`Persist`] to use compact json format.
     pub fn compact(self) -> Self {
-        Self(Persist {
+        Self(Provider {
             pretty: false,
             ..self.0
         })
