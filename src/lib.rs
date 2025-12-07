@@ -78,7 +78,7 @@ impl Provider {
         T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
-        let path = location.config_dir().join("persist.json");
+        let path = location.data_dir().join("persist.json");
 
         if !path.exists() {
             return Ok(Abseil::new(Default::default()));
@@ -90,7 +90,7 @@ impl Provider {
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let location = self.location()?;
-        let dir = location.config_dir();
+        let dir = location.data_dir();
 
         if !dir.exists() {
             fs::create_dir_all(dir)?;
@@ -211,7 +211,7 @@ mod stringify {
     use core::fmt;
 
     use either::Either;
-    use serde::{de::DeserializeOwned, Serialize};
+    use serde::{Serialize, de::DeserializeOwned};
 
     pub type Result<T, E = Error> = std::result::Result<T, E>;
 
