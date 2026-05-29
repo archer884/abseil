@@ -1,7 +1,7 @@
 use std::{fmt, fs, io};
 
-use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
+use jiff::Zoned;
 use serde::{Deserialize, Serialize};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -211,14 +211,14 @@ impl ProviderBuilder {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Abseil<T> {
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Zoned,
     pub state: T,
 }
 
 impl<T> Abseil<T> {
     fn new(state: T) -> Self {
         Self {
-            timestamp: Utc::now(),
+            timestamp: Zoned::now(),
             state,
         }
     }

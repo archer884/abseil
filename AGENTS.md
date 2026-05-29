@@ -37,7 +37,7 @@ Single-file library (`src/lib.rs`, ~240 lines). No binaries, no examples, no tes
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
    - `use_config_dir()` → Store in config directory instead of data directory
 
-3. **`Abseil<T>`** - Wrapper struct with `timestamp: DateTime<Utc>` and `state: T`. All persisted data is wrapped in this.
+3. **`Abseil<T>`** - Wrapper struct with `timestamp: Zoned` and `state: T`. All persisted data is wrapped in this.
 
 4. **`Error`** - Unified error type: `AppData(Provider)` | `IO(io::Error)` | `Serialization(stringify::Error)`
 
@@ -85,7 +85,7 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 
 | Crate | Purpose |
 |-------|---------|
-| `chrono` | Timestamps in `Abseil<T>` |
+| `jiff` | Timestamps in `Abseil<T>` |
 | `directories` | Platform-specific data directories |
 | `either` | TOML error type unification |
 | `serde` | Serialization framework |
