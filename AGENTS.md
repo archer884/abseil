@@ -27,13 +27,13 @@ Single-file library (`src/lib.rs`, ~240 lines). No binaries, no examples, no tes
 ### Core Components
 
 1. **`Provider`** - Main entry point. Configured with app name (and optional qualifier/organization). Methods:
-   - `load<T>()` → Deserializes state from storage file in data dir, returns `Default::default()` if missing
+   - `load<T>()` → Deserializes state from storage file in data dir, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if neither exists
    - `store(state)` → Serializes and writes state to storage file
    - `builder(app)` → Returns `ProviderBuilder` for advanced configuration
 
 2. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
    - `with_qualifier(s)` / `with_organization(s)` → Set reverse-domain qualifiers
-   - `compact()` → Disable pretty-printing (default is pretty)
+   - `pretty()` → Enable pretty-printing (default is compact)
 
 3. **`Abseil<T>`** - Wrapper struct with `timestamp: DateTime<Utc>` and `state: T`. All persisted data is wrapped in this.
 
@@ -93,15 +93,17 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 
 1. **Filename matches format**: `DEFAULT_FILENAME` const is `storage.json` for JSON feature, `storage.toml` for TOML feature.
 
-2. **Data dir, not config dir**: Storage uses `data_dir()`. Historical versions used `config_dir()`. Don't confuse them.
+2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. `store()` always writes to the new filename.
 
-3. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
+3. **Data dir, not config dir**: Storage uses `data_dir()`. Historical versions used `config_dir()`. Don't confuse them.
 
-4. **Trait bound differences**: `load<T>()` requires `T: Default + for<'a> Deserialize<'a>` with JSON, but `T: Default + DeserializeOwned` with TOML. This can cause compilation errors when switching features.
+4. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
 
-5. **Pretty by default**: `Provider::new()` creates pretty-printing provider. Use `Provider::builder(app).compact()` for minified output.
+5. **Trait bound differences**: `load<T>()` requires `T: Default + for<'a> Deserialize<'a>` with JSON, but `T: Default + DeserializeOwned` with TOML. This can cause compilation errors when switching features.
 
-6. **No tests exist**: The library has zero unit tests or doc tests. Any changes should include tests.
+6. **Compact by default**: `Provider::new()` creates compact provider. Use `Provider::builder(app).pretty()` for pretty-printed output.
+
+7. **No tests exist**: The library has zero unit tests or doc tests. Any changes should include tests.
 
 7. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
 

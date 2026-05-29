@@ -66,7 +66,7 @@ impl Provider {
             qualifier: None,
             organization: None,
             application: application.into(),
-            pretty: true,
+            pretty: false,
         }
     }
 
@@ -75,7 +75,7 @@ impl Provider {
             qualifier: None,
             organization: None,
             application: application.into(),
-            pretty: true,
+            pretty: false,
         })
     }
 
@@ -84,14 +84,21 @@ impl Provider {
         T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
-        let path = location.data_dir().join(DEFAULT_FILENAME);
+        let dir = location.data_dir();
+        let path = dir.join(DEFAULT_FILENAME);
 
-        if !path.exists() {
-            return Ok(Abseil::new(Default::default()));
+        if path.exists() {
+            let text = fs::read_to_string(path)?;
+            return Ok(stringify::from_str(&text)?);
         }
 
-        let text = fs::read_to_string(path)?;
-        Ok(stringify::from_str(&text)?)
+        let legacy_path = dir.join("persist.json");
+        if legacy_path.exists() {
+            let text = fs::read_to_string(legacy_path)?;
+            return Ok(stringify::from_str(&text)?);
+        }
+
+        Ok(Abseil::new(Default::default()))
     }
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
@@ -163,10 +170,10 @@ impl ProviderBuilder {
         })
     }
 
-    /// Instruct [`Persist`] to use compact json format.
-    pub fn compact(self) -> Self {
+    /// Instruct [`Provider`] to use pretty-printed format.
+    pub fn pretty(self) -> Self {
         Self(Provider {
-            pretty: false,
+            pretty: true,
             ..self.0
         })
     }
