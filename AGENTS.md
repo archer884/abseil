@@ -144,6 +144,6 @@ All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` time
 
 2. No tests - AGENTS.md calls this out, but it's worth repeating. Core logic (fallback, dir selection, serialization) should have coverage.
 
-3. `Error::AppData(Provider)``  is unusual - Storing the entire  Provider  in the error is heavy. Consider storing just the application name or a display string.
+3. `Error::AppData(Provider)`  is unusual - Storing the entire  Provider  in the error is heavy. Consider storing just the application name or a display string.
 
 4. `Either` for TOML errors - Works, but  Box<dyn Error>  or a custom enum would be more explicit. The `either` crate dependency exists only for this.
