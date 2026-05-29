@@ -52,30 +52,35 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
+enum Dir {
+    Config,
+    #[default]
+    Data,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct Provider {
     qualifier: Option<String>,
     organization: Option<String>,
     application: String,
     pretty: bool,
+    filename: Option<String>,
+    dir: Dir,
 }
 
 impl Provider {
     pub fn new(application: impl Into<String>) -> Self {
         Self {
-            qualifier: None,
-            organization: None,
             application: application.into(),
-            pretty: false,
+            ..Default::default()
         }
     }
 
     pub fn builder(application: impl Into<String>) -> ProviderBuilder {
         ProviderBuilder(Provider {
-            qualifier: None,
-            organization: None,
             application: application.into(),
-            pretty: false,
+            ..Default::default()
         })
     }
 
@@ -84,8 +89,9 @@ impl Provider {
         T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
-        let dir = location.data_dir();
-        let path = dir.join(DEFAULT_FILENAME);
+        let dir = self.resolve_dir(&location);
+        let filename = self.filename.as_deref().unwrap_or(DEFAULT_FILENAME);
+        let path = dir.join(filename);
 
         if path.exists() {
             let text = fs::read_to_string(path)?;
@@ -103,15 +109,23 @@ impl Provider {
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let location = self.location()?;
-        let dir = location.data_dir();
+        let dir = self.resolve_dir(&location);
 
         if !dir.exists() {
             fs::create_dir_all(dir)?;
         }
 
-        let path = dir.join(DEFAULT_FILENAME);
+        let filename = self.filename.as_deref().unwrap_or(DEFAULT_FILENAME);
+        let path = dir.join(filename);
         let text = self.stringify(state)?;
         Ok(fs::write(path, text)?)
+    }
+
+    fn resolve_dir<'a>(&self, location: &'a ProjectDirs) -> &'a std::path::Path {
+        match self.dir {
+            Dir::Config => location.config_dir(),
+            Dir::Data => location.data_dir(),
+        }
     }
 
     fn stringify(&self, state: impl Serialize) -> stringify::Result<String> {
@@ -174,6 +188,22 @@ impl ProviderBuilder {
     pub fn pretty(self) -> Self {
         Self(Provider {
             pretty: true,
+            ..self.0
+        })
+    }
+
+    /// Set a custom filename for the storage file.
+    pub fn with_filename(self, filename: impl Into<String>) -> Self {
+        Self(Provider {
+            filename: Some(filename.into()),
+            ..self.0
+        })
+    }
+
+    /// Store configuration in the config directory instead of the data directory.
+    pub fn use_config_dir(self) -> Self {
+        Self(Provider {
+            dir: Dir::Config,
             ..self.0
         })
     }

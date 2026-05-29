@@ -34,6 +34,8 @@ Single-file library (`src/lib.rs`, ~240 lines). No binaries, no examples, no tes
 2. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
    - `with_qualifier(s)` / `with_organization(s)` → Set reverse-domain qualifiers
    - `pretty()` → Enable pretty-printing (default is compact)
+   - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
+   - `use_config_dir()` → Store in config directory instead of data directory
 
 3. **`Abseil<T>`** - Wrapper struct with `timestamp: DateTime<Utc>` and `state: T`. All persisted data is wrapped in this.
 
@@ -64,8 +66,9 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 ### File Storage Location
 - Uses `directories::ProjectDirs` for platform-specific paths
-- Stores in `data_dir()` (NOT `config_dir()` - this changed in commit d8f3a03)
-- Filename matches format: `storage.json` for JSON, `storage.toml` for TOML (set via `DEFAULT_FILENAME` const)
+- Default is `data_dir()`, but can be configured to use `config_dir()` via `use_config_dir()`
+- Default filename matches format: `storage.json` for JSON, `storage.toml` for TOML (set via `DEFAULT_FILENAME` const)
+- Custom filename can be set via `with_filename()`
 
 ### State Wrapper
 All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timestamp on save. Users access the inner state via `abseil.into_inner()`.
@@ -95,7 +98,7 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 
 2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. `store()` always writes to the new filename.
 
-3. **Data dir, not config dir**: Storage uses `data_dir()`. Historical versions used `config_dir()`. Don't confuse them.
+3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `Dir` enum controls this behavior.
 
 4. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
 
@@ -123,8 +126,3 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy
 - No changelog
-
-## Todo items
-
-- Allow customization of filename (also: select a better default filename)
-- Allow users to select config or data dir for storage
