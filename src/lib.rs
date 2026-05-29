@@ -3,7 +3,6 @@ mod location;
 use std::{fmt, fs, io};
 
 use directories::ProjectDirs;
-use jiff::Zoned;
 use location::{Dir, Location};
 use serde::{Deserialize, Serialize};
 
@@ -80,7 +79,7 @@ impl Provider {
         })
     }
 
-    pub fn load<T>(&self) -> Result<Abseil<T>>
+    pub fn load<T>(&self) -> Result<T>
     where
         T: Default + for<'a> Deserialize<'a>,
     {
@@ -91,16 +90,20 @@ impl Provider {
 
         if path.exists() {
             let text = fs::read_to_string(path)?;
-            return Ok(stringify::from_str(&text)?);
+            return stringify::from_str(&text)
+                .or_else(|_| stringify::from_str::<Abseil<T>>(&text).map(Abseil::into_inner))
+                .map_err(Into::into);
         }
 
         let legacy_path = dir.join("persist.json");
         if legacy_path.exists() {
             let text = fs::read_to_string(legacy_path)?;
-            return Ok(stringify::from_str(&text)?);
+            return stringify::from_str(&text)
+                .or_else(|_| stringify::from_str::<Abseil<T>>(&text).map(Abseil::into_inner))
+                .map_err(Into::into);
         }
 
-        Ok(Abseil::new(Default::default()))
+        Ok(Default::default())
     }
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
@@ -129,26 +132,19 @@ impl Provider {
 
     fn stringify(&self, state: impl Serialize) -> stringify::Result<String> {
         if self.pretty {
-            stringify::to_string_pretty(&Abseil::new(state))
+            stringify::to_string_pretty(&state)
         } else {
-            stringify::to_string(&Abseil::new(state))
+            stringify::to_string(&state)
         }
     }
 }
 
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(qualifier) = &self.qualifier {
-            f.write_str(qualifier)?;
-            f.write_str("/")?;
+        match self.location() {
+            Ok(location) => write!(f, "{location}"),
+            Err(_) => f.write_str("storage unavailable"),
         }
-
-        if let Some(organization) = &self.organization {
-            f.write_str(organization)?;
-            f.write_str("/")?;
-        }
-
-        f.write_str(&self.application)
     }
 }
 
@@ -201,18 +197,10 @@ impl ProviderBuilder {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Abseil<T> {
-    pub timestamp: Zoned,
     pub state: T,
 }
 
 impl<T> Abseil<T> {
-    fn new(state: T) -> Self {
-        Self {
-            timestamp: Zoned::now(),
-            state,
-        }
-    }
-
     pub fn into_inner(self) -> T {
         self.state
     }

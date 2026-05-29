@@ -1,3 +1,4 @@
+use core::fmt;
 use std::path::Path;
 
 use directories::ProjectDirs;
@@ -28,5 +29,11 @@ impl Location {
             Dir::Config => self.directories.config_dir(),
             Dir::Data => self.directories.data_dir(),
         }
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.path().display())
     }
 }
