@@ -6,6 +6,12 @@ use serde::{Deserialize, Serialize};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[cfg(feature = "json")]
+const DEFAULT_FILENAME: &str = "storage.json";
+
+#[cfg(all(feature = "toml", not(feature = "json")))]
+const DEFAULT_FILENAME: &str = "storage.toml";
+
 #[derive(Debug)]
 pub enum Error {
     AppData(Provider),
@@ -78,7 +84,7 @@ impl Provider {
         T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
-        let path = location.data_dir().join("persist.json");
+        let path = location.data_dir().join(DEFAULT_FILENAME);
 
         if !path.exists() {
             return Ok(Abseil::new(Default::default()));
@@ -96,7 +102,7 @@ impl Provider {
             fs::create_dir_all(dir)?;
         }
 
-        let path = dir.join("persist.json");
+        let path = dir.join(DEFAULT_FILENAME);
         let text = self.stringify(state)?;
         Ok(fs::write(path, text)?)
     }
