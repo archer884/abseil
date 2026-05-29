@@ -15,10 +15,14 @@ const DEFAULT_FILENAME: &str = "storage.json";
 #[cfg(all(feature = "toml", not(feature = "json")))]
 const DEFAULT_FILENAME: &str = "storage.toml";
 
+/// Errors that can occur when loading or storing application state.
 #[derive(Debug)]
 pub enum Error {
+    /// The platform-specific application data directory could not be determined.
     AppData(String),
+    /// An I/O error occurred while reading or writing the storage file.
     IO(io::Error),
+    /// A serialization or deserialization error occurred.
     Serialization(stringify::Error),
 }
 
@@ -55,6 +59,10 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Persists application state to a platform-specific data directory.
+///
+/// Create a `Provider` via [`Provider::builder`]. Use [`store`](Provider::store) to write
+/// state and [`load`](Provider::load) to read it back.
 #[derive(Debug, Clone)]
 pub struct Provider {
     location: Location,
@@ -63,6 +71,7 @@ pub struct Provider {
 }
 
 impl Provider {
+    /// Returns a [`ProviderBuilder`] for the given application name.
     pub fn builder(application: impl Into<String>) -> ProviderBuilder {
         ProviderBuilder {
             application: application.into(),
@@ -70,6 +79,12 @@ impl Provider {
         }
     }
 
+    /// Loads persisted state from storage.
+    ///
+    /// Attempts to deserialize directly as `T` first. If that fails, falls back to
+    /// deserializing as a legacy `Abseil<T>` wrapper and extracts the inner state.
+    /// Also checks for a legacy `persist.json` file if the primary file is missing.
+    /// Returns `T::default()` if no persisted state exists.
     pub fn load<T>(&self) -> Result<T>
     where
         T: Default + for<'a> Deserialize<'a>,
@@ -95,6 +110,9 @@ impl Provider {
         Ok(Default::default())
     }
 
+    /// Serializes and writes the given state to the storage file.
+    ///
+    /// Creates the storage directory if it does not exist.
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let dir = self.location.path();
 
@@ -107,6 +125,7 @@ impl Provider {
         Ok(fs::write(path, text)?)
     }
 
+    /// Returns a reference to the resolved storage [`Location`].
     pub fn location(&self) -> &Location {
         &self.location
     }
@@ -130,6 +149,10 @@ impl fmt::Display for Provider {
     }
 }
 
+/// Builds a [`Provider`] with custom configuration.
+///
+/// Obtain a builder via [`Provider::builder`]. Chain configuration methods,
+/// then call [`build`](ProviderBuilder::build) to produce a `Provider`.
 #[derive(Debug, Default)]
 pub struct ProviderBuilder {
     qualifier: Option<String>,
@@ -141,6 +164,9 @@ pub struct ProviderBuilder {
 }
 
 impl ProviderBuilder {
+    /// Resolves the storage location and returns a configured [`Provider`].
+    ///
+    /// Returns [`Error::AppData`] if the platform data directory cannot be determined.
     pub fn build(self) -> Result<Provider> {
         let directories = ProjectDirs::from(
             self.qualifier.as_deref().unwrap_or(""),
@@ -156,6 +182,7 @@ impl ProviderBuilder {
         })
     }
 
+    /// Sets the qualifier component of the reverse-domain application identifier.
     pub fn with_qualifier(self, qualifier: impl Into<String>) -> Self {
         Self {
             qualifier: Some(qualifier.into()),
@@ -163,6 +190,7 @@ impl ProviderBuilder {
         }
     }
 
+    /// Sets the organization component of the reverse-domain application identifier.
     pub fn with_organization(self, organization: impl Into<String>) -> Self {
         Self {
             organization: Some(organization.into()),

@@ -131,7 +131,6 @@ toml = ["dep:toml"]   # Only works when json is disabled
 ## What's Missing (for contributors)
 
 - No unit tests
-- No doc comments on public items
 - No examples directory
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy

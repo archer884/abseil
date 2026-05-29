@@ -10,6 +10,9 @@ pub(crate) enum Dir {
     Data,
 }
 
+/// The resolved storage directory for an application.
+///
+/// Wraps platform-specific directory resolution from the `directories` crate.
 #[derive(Debug, Clone)]
 pub struct Location {
     dir_option: Dir,
@@ -24,6 +27,7 @@ impl Location {
         }
     }
 
+    /// Returns the path to the resolved storage directory.
     pub fn path(&self) -> &Path {
         match self.dir_option {
             Dir::Config => self.directories.config_dir(),
