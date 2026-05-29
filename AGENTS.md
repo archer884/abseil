@@ -138,23 +138,12 @@ All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` time
 - No MSRV (minimum supported Rust version) policy
 - No changelog
 
-## Todo:
-
-- Remove wrapper struct (maaaaaybe allow users to opt into it?)
-
 ## Review comments
 
-1.  location.rs  isn't actually linked - The diagnostic says it's "not included in the module tree." You have  mod location;  on line 1 of  lib.rs , but the diagnostics suggest rust-analyzer doesn't see it. This might be a transient analyzer issue or a real problem.
+1.  Dir  is  pub(crate)  but imported in  lib.rs  - If  location.rs  is truly a separate module, the import  use location::{Dir, Location}  suggests it's nested under the crate root, not a standalone file. The AGENTS.md says "two- file" but it's really one module split across files.
 
-2.  Dir  is  pub(crate)  but imported in  lib.rs  - If  location.rs  is truly a separate module, the import  use location::{Dir, Location}  suggests it's nested under the crate root, not a standalone file. The AGENTS.md says "two- file" but it's really one module split across files.
+2. No tests - AGENTS.md calls this out, but it's worth repeating. Core logic (fallback, dir selection, serialization) should have coverage.
 
-3. Duplicate  with_filename  logic -  self.filename.as_deref().unwrap_or(DEFAULT_FILENAME)  appears in both  load() (line 89) and  store()  (line 114). Consider a helper method.
+3. `Error::AppData(Provider)``  is unusual - Storing the entire  Provider  in the error is heavy. Consider storing just the application name or a display string.
 
-4. No tests - AGENTS.md calls this out, but it's worth repeating. Core logic (fallback, dir selection, serialization)
-should have coverage.
-
-5. `Error::AppData(Provider)``  is unusual - Storing the entire  Provider  in the error is heavy. Consider storing just
-the application name or a display string.
-
-6. `Either` for TOML errors - Works, but  Box<dyn Error>  or a custom enum would be more explicit. The `either` crate
-dependency exists only for this.
+4. `Either` for TOML errors - Works, but  Box<dyn Error>  or a custom enum would be more explicit. The `either` crate dependency exists only for this.

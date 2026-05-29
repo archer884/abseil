@@ -85,8 +85,7 @@ impl Provider {
     {
         let location = self.location()?;
         let dir = location.path();
-        let filename = self.filename.as_deref().unwrap_or(DEFAULT_FILENAME);
-        let path = dir.join(filename);
+        let path = dir.join(self.filename());
 
         if path.exists() {
             let text = fs::read_to_string(path)?;
@@ -114,8 +113,7 @@ impl Provider {
             fs::create_dir_all(dir)?;
         }
 
-        let filename = self.filename.as_deref().unwrap_or(DEFAULT_FILENAME);
-        let path = dir.join(filename);
+        let path = dir.join(self.filename());
         let text = self.stringify(state)?;
         Ok(fs::write(path, text)?)
     }
@@ -128,6 +126,10 @@ impl Provider {
         )
         .ok_or_else(|| Error::AppData(self.clone()))?;
         Ok(Location::new(directories, self.dir))
+    }
+
+    fn filename(&self) -> &str {
+        self.filename.as_deref().unwrap_or(DEFAULT_FILENAME)
     }
 
     fn stringify(&self, state: impl Serialize) -> stringify::Result<String> {
