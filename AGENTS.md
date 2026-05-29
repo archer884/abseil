@@ -22,26 +22,36 @@ cargo clippy         # Lint (if clippy is installed)
 
 ## Architecture
 
-Single-file library (`src/lib.rs`, ~240 lines). No binaries, no examples, no tests.
+Two-file library: `src/lib.rs` (~275 lines) and `src/location.rs` (~33 lines). No binaries, no examples, no tests.
 
 ### Core Components
 
 1. **`Provider`** - Main entry point. Configured with app name (and optional qualifier/organization). Methods:
    - `load<T>()` → Deserializes state from storage file in data dir, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if neither exists
    - `store(state)` → Serializes and writes state to storage file
+   - `location()` → Returns `Result<Location>` with the resolved storage directory
    - `builder(app)` → Returns `ProviderBuilder` for advanced configuration
 
-2. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
+2. **`Location`** (in `location.rs`) - Wraps `ProjectDirs` and `Dir` selection. Public methods:
+   - `path()` → Returns `&Path` to the resolved directory (data_dir or config_dir)
+
+3. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
    - `with_qualifier(s)` / `with_organization(s)` → Set reverse-domain qualifiers
    - `pretty()` → Enable pretty-printing (default is compact)
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
    - `use_config_dir()` → Store in config directory instead of data directory
 
-3. **`Abseil<T>`** - Wrapper struct with `timestamp: Zoned` and `state: T`. All persisted data is wrapped in this.
+4. **`Abseil<T>`** - Wrapper struct with `timestamp: Zoned` and `state: T`. All persisted data is wrapped in this.
 
-4. **`Error`** - Unified error type: `AppData(Provider)` | `IO(io::Error)` | `Serialization(stringify::Error)`
+5. **`Error`** - Unified error type: `AppData(Provider)` | `IO(io::Error)` | `Serialization(stringify::Error)`
 
-5. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
+6. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
+
+### Module Structure
+
+- **`location.rs`** - Contains `Dir` enum (Config/Data) and `Location` struct
+  - `Dir` is `pub(crate)` 
+  - `Location` is `pub` with public `path()` method
 
 ### Serialization Format Abstraction
 
@@ -66,12 +76,13 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 ### File Storage Location
 - Uses `directories::ProjectDirs` for platform-specific paths
+- `Provider::location()` resolves to `Location` which wraps `ProjectDirs` + `Dir` selection
 - Default is `data_dir()`, but can be configured to use `config_dir()` via `use_config_dir()`
 - Default filename matches format: `storage.json` for JSON, `storage.toml` for TOML (set via `DEFAULT_FILENAME` const)
 - Custom filename can be set via `with_filename()`
 
 ### State Wrapper
-All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timestamp on save. Users access the inner state via `abseil.into_inner()`.
+All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` timestamp on save. Users access the inner state via `abseil.into_inner()`.
 
 ### Error Handling
 - `Error` implements `Display`, `std::error::Error`, and bidirectional conversion with `io::Error`
@@ -98,7 +109,7 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 
 2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. `store()` always writes to the new filename.
 
-3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `Dir` enum controls this behavior.
+3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `Dir` enum in `location.rs` controls this behavior.
 
 4. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
 
@@ -108,14 +119,14 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 
 7. **No tests exist**: The library has zero unit tests or doc tests. Any changes should include tests.
 
-7. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
+8. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
 
 ## Conventions
 
 - **Edition**: Rust 2024 (unusual—most crates use 2021)
 - **Error types**: Derive `Debug`, implement `Display` and `std::error::Error`
 - **Builder pattern**: Newtype wrapper `ProviderBuilder(Provider)` with consuming self methods
-- **Module visibility**: `stringify` module is private; public API is only `Provider`, `Abseil`, `Error`, `Result`
+- **Module visibility**: `stringify` module is private; `location` module is public but `Dir` is `pub(crate)`
 - **Type alias**: `pub type Result<T, E = Error>` for crate-local convenience
 
 ## What's Missing (for contributors)
