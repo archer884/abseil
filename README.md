@@ -4,7 +4,7 @@ An easy app storage provider for Rust.
 
 ## Overview
 
-Abseil provides a simple API to persist application state to platform-specific data directories. It automatically wraps your state with timestamps and handles serialization/deserialization.
+Abseil provides a simple API to persist application state to platform-specific data directories. It handles serialization/deserialization with backward-compatible support for legacy wrapped payloads.
 
 ## Features
 
@@ -17,7 +17,7 @@ Abseil provides a simple API to persist application state to platform-specific d
 ## Usage
 
 ```rust
-use abseil::{Provider, Abseil};
+use abseil::Provider;
 
 // Create a provider
 let provider = Provider::new("my-app");
@@ -26,8 +26,7 @@ let provider = Provider::new("my-app");
 provider.store(&my_state)?;
 
 // Load state (returns Default if no saved state exists)
-let abseil: Abseil<MyState> = provider.load()?;
-let state = abseil.into_inner();
+let state: MyState = provider.load()?;
 ```
 
 ### Builder Pattern

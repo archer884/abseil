@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**abseil** is a Rust library crate for application state persistence. It provides a simple API to serialize application state to platform-specific data directories with automatic timestamps.
+**abseil** is a Rust library crate for application state persistence. It provides a simple API to serialize application state to platform-specific data directories.
 
 **Repository**: https://github.com/archer884/abseil  
 **License**: MIT/Apache-2.0 dual license
@@ -22,17 +22,17 @@ cargo clippy         # Lint (if clippy is installed)
 
 ## Architecture
 
-Two-file library: `src/lib.rs` (~275 lines) and `src/location.rs` (~33 lines). No binaries, no examples, no tests.
+Two-file library: `src/lib.rs` (~260 lines) and `src/location.rs` (~40 lines). No binaries, no examples, no tests.
 
 ### Core Components
 
 1. **`Provider`** - Main entry point. Configured with app name (and optional qualifier/organization). Methods:
-   - `load<T>()` → Deserializes state from storage file in data dir, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if neither exists
+   - `load<T>()` → Deserializes state from storage file in data dir; tries direct `T` deserialization first, falls back to `Abseil<T>` for backward compat, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if nothing exists. Returns `Result<T>`.
    - `store(state)` → Serializes and writes state to storage file
    - `location()` → Returns `Result<Location>` with the resolved storage directory
    - `builder(app)` → Returns `ProviderBuilder` for advanced configuration
 
-2. **`Location`** (in `location.rs`) - Wraps `ProjectDirs` and `Dir` selection. Public methods:
+2. **`Location`** (in `location.rs`) - Wraps `ProjectDirs` and `Dir` selection. Implements `Display` (shows path). Public methods:
    - `path()` → Returns `&Path` to the resolved directory (data_dir or config_dir)
 
 3. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
@@ -41,7 +41,7 @@ Two-file library: `src/lib.rs` (~275 lines) and `src/location.rs` (~33 lines). N
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
    - `use_config_dir()` → Store in config directory instead of data directory
 
-4. **`Abseil<T>`** - Wrapper struct with `timestamp: Zoned` and `state: T`. All persisted data is wrapped in this.
+4. **`Abseil<T>`** - Legacy wrapper struct with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
 
 5. **`Error`** - Unified error type: `AppData(Provider)` | `IO(io::Error)` | `Serialization(stringify::Error)`
 
@@ -50,8 +50,8 @@ Two-file library: `src/lib.rs` (~275 lines) and `src/location.rs` (~33 lines). N
 ### Module Structure
 
 - **`location.rs`** - Contains `Dir` enum (Config/Data) and `Location` struct
-  - `Dir` is `pub(crate)` 
-  - `Location` is `pub` with public `path()` method
+  - `Dir` is `pub(crate)`
+  - `Location` is `pub` with public `path()` method and `Display` impl
 
 ### Serialization Format Abstraction
 
@@ -81,8 +81,8 @@ toml = ["dep:toml"]   # Only works when json is disabled
 - Default filename matches format: `storage.json` for JSON, `storage.toml` for TOML (set via `DEFAULT_FILENAME` const)
 - Custom filename can be set via `with_filename()`
 
-### State Wrapper
-All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` timestamp on save. Users access the inner state via `abseil.into_inner()`.
+### State Wrapper (Legacy)
+`Abseil<T>` exists for backward-compatible deserialization only. `load()` first tries to deserialize as `T` directly; if that fails, it tries `Abseil<T>` and extracts the inner state. `store()` writes `T` directly without wrapping.
 
 ### Error Handling
 - `Error` implements `Display`, `std::error::Error`, and bidirectional conversion with `io::Error`
@@ -96,7 +96,6 @@ All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` time
 
 | Crate | Purpose |
 |-------|---------|
-| `jiff` | Timestamps in `Abseil<T>` |
 | `directories` | Platform-specific data directories |
 | `either` | TOML error type unification |
 | `serde` | Serialization framework |
@@ -107,7 +106,7 @@ All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` time
 
 1. **Filename matches format**: `DEFAULT_FILENAME` const is `storage.json` for JSON feature, `storage.toml` for TOML feature.
 
-2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. `store()` always writes to the new filename.
+2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. Additionally, if direct deserialization as `T` fails, `load()` retries as `Abseil<T>` for backward compat with wrapped payloads. `store()` always writes `T` directly.
 
 3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `Dir` enum in `location.rs` controls this behavior.
 
@@ -140,10 +139,4 @@ All state is wrapped in `Abseil<T>` which automatically adds `Zoned::now()` time
 
 ## Review comments
 
-1.  Dir  is  pub(crate)  but imported in  lib.rs  - If  location.rs  is truly a separate module, the import  use location::{Dir, Location}  suggests it's nested under the crate root, not a standalone file. The AGENTS.md says "two- file" but it's really one module split across files.
-
-2. No tests - AGENTS.md calls this out, but it's worth repeating. Core logic (fallback, dir selection, serialization) should have coverage.
-
-3. `Error::AppData(Provider)`  is unusual - Storing the entire  Provider  in the error is heavy. Consider storing just the application name or a display string.
-
-4. `Either` for TOML errors - Works, but  Box<dyn Error>  or a custom enum would be more explicit. The `either` crate dependency exists only for this.
+1. `Either` for TOML errors - Works, but `Box<dyn Error>` or a custom enum would be more explicit. The `either` crate dependency exists only for this.

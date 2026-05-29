@@ -16,7 +16,7 @@ const DEFAULT_FILENAME: &str = "storage.toml";
 
 #[derive(Debug)]
 pub enum Error {
-    AppData(Provider),
+    AppData(String),
     IO(io::Error),
     Serialization(stringify::Error),
 }
@@ -45,7 +45,7 @@ impl From<stringify::Error> for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::AppData(persist) => write!(f, "unable to open storage for {persist}"),
+            Error::AppData(name) => write!(f, "unable to open storage for {name}"),
             Error::IO(e) => e.fmt(f),
             Error::Serialization(e) => e.fmt(f),
         }
@@ -124,7 +124,7 @@ impl Provider {
             self.organization.as_deref().unwrap_or(""),
             &self.application,
         )
-        .ok_or_else(|| Error::AppData(self.clone()))?;
+        .ok_or_else(|| Error::AppData(self.application.clone()))?;
         Ok(Location::new(directories, self.dir))
     }
 
@@ -198,7 +198,7 @@ impl ProviderBuilder {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Abseil<T> {
+struct Abseil<T> {
     pub state: T,
 }
 
