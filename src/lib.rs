@@ -3,8 +3,9 @@ mod location;
 use std::{fmt, fs, io};
 
 use directories::ProjectDirs;
-use location::{Dir, Location};
 use serde::{Deserialize, Serialize};
+
+use crate::location::{Dir, Location};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -54,37 +55,26 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Provider {
-    qualifier: Option<String>,
-    organization: Option<String>,
-    application: String,
-    pretty: bool,
+    location: Location,
     filename: Option<String>,
-    dir: Dir,
+    pretty: bool,
 }
 
 impl Provider {
-    pub fn new(application: impl Into<String>) -> Self {
-        Self {
+    pub fn builder(application: impl Into<String>) -> ProviderBuilder {
+        ProviderBuilder {
             application: application.into(),
             ..Default::default()
         }
-    }
-
-    pub fn builder(application: impl Into<String>) -> ProviderBuilder {
-        ProviderBuilder(Provider {
-            application: application.into(),
-            ..Default::default()
-        })
     }
 
     pub fn load<T>(&self) -> Result<T>
     where
         T: Default + for<'a> Deserialize<'a>,
     {
-        let location = self.location()?;
-        let dir = location.path();
+        let dir = self.location.path();
         let path = dir.join(self.filename());
 
         if path.exists() {
@@ -106,8 +96,7 @@ impl Provider {
     }
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
-        let location = self.location()?;
-        let dir = location.path();
+        let dir = self.location.path();
 
         if !dir.exists() {
             fs::create_dir_all(dir)?;
@@ -118,14 +107,8 @@ impl Provider {
         Ok(fs::write(path, text)?)
     }
 
-    pub fn location(&self) -> Result<Location> {
-        let directories = ProjectDirs::from(
-            self.qualifier.as_deref().unwrap_or(""),
-            self.organization.as_deref().unwrap_or(""),
-            &self.application,
-        )
-        .ok_or_else(|| Error::AppData(self.application.clone()))?;
-        Ok(Location::new(directories, self.dir))
+    pub fn location(&self) -> &Location {
+        &self.location
     }
 
     fn filename(&self) -> &str {
@@ -143,57 +126,72 @@ impl Provider {
 
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.location() {
-            Ok(location) => write!(f, "{location}"),
-            Err(_) => f.write_str("storage unavailable"),
-        }
+        write!(f, "{}", self.location)
     }
 }
 
-#[derive(Debug)]
-pub struct ProviderBuilder(Provider);
+#[derive(Debug, Default)]
+pub struct ProviderBuilder {
+    qualifier: Option<String>,
+    organization: Option<String>,
+    application: String,
+    pretty: bool,
+    filename: Option<String>,
+    dir: Dir,
+}
 
 impl ProviderBuilder {
-    pub fn build(self) -> Provider {
-        self.0
+    pub fn build(self) -> Result<Provider> {
+        let directories = ProjectDirs::from(
+            self.qualifier.as_deref().unwrap_or(""),
+            self.organization.as_deref().unwrap_or(""),
+            &self.application,
+        )
+        .ok_or(Error::AppData(self.application))?;
+
+        Ok(Provider {
+            location: Location::new(directories, self.dir),
+            pretty: self.pretty,
+            filename: self.filename,
+        })
     }
 
     pub fn with_qualifier(self, qualifier: impl Into<String>) -> Self {
-        Self(Provider {
+        Self {
             qualifier: Some(qualifier.into()),
-            ..self.0
-        })
+            ..self
+        }
     }
 
     pub fn with_organization(self, organization: impl Into<String>) -> Self {
-        Self(Provider {
+        Self {
             organization: Some(organization.into()),
-            ..self.0
-        })
+            ..self
+        }
     }
 
-    /// Instruct [`Provider`] to use pretty-printed format.
+    /// Format output when storing.
     pub fn pretty(self) -> Self {
-        Self(Provider {
+        Self {
             pretty: true,
-            ..self.0
-        })
+            ..self
+        }
     }
 
     /// Set a custom filename for the storage file.
     pub fn with_filename(self, filename: impl Into<String>) -> Self {
-        Self(Provider {
+        Self {
             filename: Some(filename.into()),
-            ..self.0
-        })
+            ..self
+        }
     }
 
     /// Store configuration in the config directory instead of the data directory.
     pub fn use_config_dir(self) -> Self {
-        Self(Provider {
+        Self {
             dir: Dir::Config,
-            ..self.0
-        })
+            ..self
+        }
     }
 }
 
@@ -233,32 +231,36 @@ mod stringify {
 mod stringify {
     use core::fmt;
 
-    use either::Either;
     use serde::{Serialize, de::DeserializeOwned};
 
     pub type Result<T, E = Error> = std::result::Result<T, E>;
 
     #[derive(Debug)]
-    pub struct Error(Either<toml::de::Error, toml::ser::Error>);
+    pub enum Error {
+        Serialization(toml::ser::Error),
+        Deserialization(toml::de::Error),
+    }
 
     impl fmt::Display for Error {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match &self.0 {
-                Either::Left(e) => e.fmt(f),
-                Either::Right(e) => e.fmt(f),
+            match self {
+                Error::Serialization(e) => e.fmt(f),
+                Error::Deserialization(e) => e.fmt(f),
             }
         }
     }
 
+    impl std::error::Error for Error {}
+
     pub fn to_string(value: &impl Serialize) -> Result<String> {
-        toml::to_string(value).map_err(|e| Error(Either::Right(e)))
+        toml::to_string(value).map_err(Error::Serialization)
     }
 
     pub fn to_string_pretty(value: &impl Serialize) -> Result<String> {
-        toml::to_string_pretty(value).map_err(|e| Error(Either::Right(e)))
+        toml::to_string_pretty(value).map_err(Error::Serialization)
     }
 
     pub fn from_str<T: DeserializeOwned>(s: &str) -> Result<T> {
-        toml::from_str(s).map_err(|e| Error(Either::Left(e)))
+        toml::from_str(s).map_err(Error::Deserialization)
     }
 }
