@@ -126,3 +126,7 @@ All state is wrapped in `Abseil<T>` which automatically adds `Utc::now()` timest
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy
 - No changelog
+
+## Todo:
+
+- Remove wrapper struct (maaaaaybe allow users to opt into it?)

@@ -1,7 +1,10 @@
+mod location;
+
 use std::{fmt, fs, io};
 
 use directories::ProjectDirs;
 use jiff::Zoned;
+use location::{Dir, Location};
 use serde::{Deserialize, Serialize};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -52,13 +55,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[derive(Debug, Default, Copy, Clone)]
-enum Dir {
-    Config,
-    #[default]
-    Data,
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct Provider {
     qualifier: Option<String>,
@@ -89,7 +85,7 @@ impl Provider {
         T: Default + for<'a> Deserialize<'a>,
     {
         let location = self.location()?;
-        let dir = self.resolve_dir(&location);
+        let dir = location.path();
         let filename = self.filename.as_deref().unwrap_or(DEFAULT_FILENAME);
         let path = dir.join(filename);
 
@@ -109,7 +105,7 @@ impl Provider {
 
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let location = self.location()?;
-        let dir = self.resolve_dir(&location);
+        let dir = location.path();
 
         if !dir.exists() {
             fs::create_dir_all(dir)?;
@@ -121,11 +117,14 @@ impl Provider {
         Ok(fs::write(path, text)?)
     }
 
-    fn resolve_dir<'a>(&self, location: &'a ProjectDirs) -> &'a std::path::Path {
-        match self.dir {
-            Dir::Config => location.config_dir(),
-            Dir::Data => location.data_dir(),
-        }
+    pub fn location(&self) -> Result<Location> {
+        let directories = ProjectDirs::from(
+            self.qualifier.as_deref().unwrap_or(""),
+            self.organization.as_deref().unwrap_or(""),
+            &self.application,
+        )
+        .ok_or_else(|| Error::AppData(self.clone()))?;
+        Ok(Location::new(directories, self.dir))
     }
 
     fn stringify(&self, state: impl Serialize) -> stringify::Result<String> {
@@ -134,15 +133,6 @@ impl Provider {
         } else {
             stringify::to_string(&Abseil::new(state))
         }
-    }
-
-    fn location(&self) -> Result<ProjectDirs> {
-        ProjectDirs::from(
-            self.qualifier.as_deref().unwrap_or(""),
-            self.organization.as_deref().unwrap_or(""),
-            &self.application,
-        )
-        .ok_or_else(|| Error::AppData(self.clone()))
     }
 }
 

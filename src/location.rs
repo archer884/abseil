@@ -1,0 +1,32 @@
+use std::path::Path;
+
+use directories::ProjectDirs;
+
+#[derive(Debug, Default, Copy, Clone)]
+pub(crate) enum Dir {
+    Config,
+    #[default]
+    Data,
+}
+
+#[derive(Debug, Clone)]
+pub struct Location {
+    dir_option: Dir,
+    directories: ProjectDirs,
+}
+
+impl Location {
+    pub(crate) fn new(directories: ProjectDirs, dir_option: Dir) -> Self {
+        Self {
+            directories,
+            dir_option,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        match self.dir_option {
+            Dir::Config => self.directories.config_dir(),
+            Dir::Data => self.directories.data_dir(),
+        }
+    }
+}
