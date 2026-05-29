@@ -64,8 +64,8 @@ impl Provider {
         }
     }
 
-    pub fn builder(application: impl Into<String>) -> PersistBuilder {
-        PersistBuilder(Provider {
+    pub fn builder(application: impl Into<String>) -> ProviderBuilder {
+        ProviderBuilder(Provider {
             qualifier: None,
             organization: None,
             application: application.into(),
@@ -136,9 +136,9 @@ impl fmt::Display for Provider {
 }
 
 #[derive(Debug)]
-pub struct PersistBuilder(Provider);
+pub struct ProviderBuilder(Provider);
 
-impl PersistBuilder {
+impl ProviderBuilder {
     pub fn build(self) -> Provider {
         self.0
     }
