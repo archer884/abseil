@@ -138,4 +138,3 @@ toml = ["dep:toml"]   # Only works when json is disabled
 - No examples directory
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy
-- No changelog
