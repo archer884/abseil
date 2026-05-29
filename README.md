@@ -8,7 +8,7 @@ Abseil provides a simple API to persist application state to platform-specific d
 
 ## Features
 
-- **Simple API**: `Provider::new("app").store(state)` / `Provider::new("app").load()`
+- **Simple API**: `Provider::builder("app").build()?.store(state)` / `provider.load()`
 - **Platform-aware**: Uses OS-specific data directories via the `directories` crate
 - **Configurable**: Custom filenames, pretty-printing, config vs data directory
 - **Format support**: JSON (default) or TOML serialization
@@ -20,7 +20,7 @@ Abseil provides a simple API to persist application state to platform-specific d
 use abseil::Provider;
 
 // Create a provider
-let provider = Provider::new("my-app");
+let provider = Provider::builder("my-app").build()?;
 
 // Store state
 provider.store(&my_state)?;
@@ -38,7 +38,7 @@ let provider = Provider::builder("my-app")
     .pretty()
     .with_filename("config.json")
     .use_config_dir()
-    .build();
+    .build()?;
 ```
 
 ## Serialization Formats

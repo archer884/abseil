@@ -26,24 +26,25 @@ Two-file library: `src/lib.rs` (~260 lines) and `src/location.rs` (~40 lines). N
 
 ### Core Components
 
-1. **`Provider`** - Main entry point. Configured with app name (and optional qualifier/organization). Methods:
-   - `load<T>()` → Deserializes state from storage file in data dir; tries direct `T` deserialization first, falls back to `Abseil<T>` for backward compat, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if nothing exists. Returns `Result<T>`.
+1. **`Provider`** - Main entry point. Created via `Provider::builder(app).build()` (returns `Result<Provider>`). Holds a resolved `Location` internally. Methods:
+   - `load<T>()` → Deserializes state from storage file; tries direct `T` deserialization first, falls back to `Abseil<T>` for backward compat, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if nothing exists. Returns `Result<T>`.
    - `store(state)` → Serializes and writes state to storage file
-   - `location()` → Returns `Result<Location>` with the resolved storage directory
-   - `builder(app)` → Returns `ProviderBuilder` for advanced configuration
+   - `location()` → Returns `&Location` with the resolved storage directory
+   - `builder(app)` → Returns `ProviderBuilder` for configuration
 
 2. **`Location`** (in `location.rs`) - Wraps `ProjectDirs` and `Dir` selection. Implements `Display` (shows path). Public methods:
    - `path()` → Returns `&Path` to the resolved directory (data_dir or config_dir)
 
-3. **`ProviderBuilder`** - Fluent builder for `Provider`. Methods:
+3. **`ProviderBuilder`** - Fluent builder for `Provider`. Owns configuration fields; resolves `Location` at build time. Methods:
    - `with_qualifier(s)` / `with_organization(s)` → Set reverse-domain qualifiers
    - `pretty()` → Enable pretty-printing (default is compact)
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
    - `use_config_dir()` → Store in config directory instead of data directory
+   - `build()` → Resolves `ProjectDirs`, returns `Result<Provider>`
 
-4. **`Abseil<T>`** - Legacy wrapper struct with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
+4. **`Abseil<T>`** - Legacy wrapper struct (`pub(crate)`) with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
 
-5. **`Error`** - Unified error type: `AppData(Provider)` | `IO(io::Error)` | `Serialization(stringify::Error)`
+5. **`Error`** - Unified error type: `AppData(String)` | `IO(io::Error)` | `Serialization(stringify::Error)`
 
 6. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
 
@@ -58,7 +59,7 @@ Two-file library: `src/lib.rs` (~260 lines) and `src/location.rs` (~40 lines). N
 The `stringify` module provides a unified interface over JSON and TOML:
 
 - **`#[cfg(feature = "json")]`** → Uses `serde_json` directly
-- **`#[cfg(all(feature = "toml", not(feature = "json")))]`** → Uses `toml` crate with `either::Either` for error handling
+- **`#[cfg(all(feature = "toml", not(feature = "json")))]`** → Uses `toml` crate with a custom `enum Error { Serialization, Deserialization }` for error handling
 - **Mutual exclusion**: TOML is only active when JSON feature is disabled
 
 ## Features
@@ -90,14 +91,13 @@ toml = ["dep:toml"]   # Only works when json is disabled
 - Custom `stringify::Error` wraps format-specific errors
 
 ### Builder Pattern
-`Provider::builder()` returns `ProviderBuilder` (newtype over `Provider`). Chain methods, then call `.build()`.
+`Provider::builder(app)` returns `ProviderBuilder` (a standalone struct, not a newtype). Chain methods, then call `.build()` which returns `Result<Provider>` (location resolution happens at build time).
 
 ## Dependencies
 
 | Crate | Purpose |
 |-------|---------|
 | `directories` | Platform-specific data directories |
-| `either` | TOML error type unification |
 | `serde` | Serialization framework |
 | `serde_json` | JSON format (optional, default) |
 | `toml` | TOML format (optional) |
@@ -114,7 +114,7 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 5. **Trait bound differences**: `load<T>()` requires `T: Default + for<'a> Deserialize<'a>` with JSON, but `T: Default + DeserializeOwned` with TOML. This can cause compilation errors when switching features.
 
-6. **Compact by default**: `Provider::new()` creates compact provider. Use `Provider::builder(app).pretty()` for pretty-printed output.
+6. **Compact by default**: Providers are compact by default. Use `Provider::builder(app).pretty()` for pretty-printed output.
 
 7. **No tests exist**: The library has zero unit tests or doc tests. Any changes should include tests.
 
@@ -124,8 +124,8 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 - **Edition**: Rust 2024 (unusual—most crates use 2021)
 - **Error types**: Derive `Debug`, implement `Display` and `std::error::Error`
-- **Builder pattern**: Newtype wrapper `ProviderBuilder(Provider)` with consuming self methods
-- **Module visibility**: `stringify` module is private; `location` module is public but `Dir` is `pub(crate)`
+- **Builder pattern**: Standalone `ProviderBuilder` struct with consuming self methods; `build()` returns `Result<Provider>`
+- **Module visibility**: `stringify` module is private; `location` module is public but `Dir` is `pub(crate)`; `Abseil` is `pub(crate)`
 - **Type alias**: `pub type Result<T, E = Error>` for crate-local convenience
 
 ## What's Missing (for contributors)
@@ -136,7 +136,3 @@ toml = ["dep:toml"]   # Only works when json is disabled
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy
 - No changelog
-
-## Review comments
-
-1. `Either` for TOML errors - Works, but `Box<dyn Error>` or a custom enum would be more explicit. The `either` crate dependency exists only for this.
