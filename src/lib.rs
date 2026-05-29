@@ -4,6 +4,7 @@ use std::{fmt, fs, io, path::PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 
 use crate::location::{Location, Root, RootLazy};
 
@@ -22,6 +23,8 @@ pub enum Error {
     AppData(String),
     /// An I/O error occurred while reading or writing the storage file.
     IO(io::Error),
+    /// No persisted state was found for the application.
+    NotFound,
     /// A serialization or deserialization error occurred.
     Serialization(stringify::Error),
 }
@@ -30,6 +33,8 @@ impl From<Error> for io::Error {
     fn from(value: Error) -> Self {
         match value {
             Error::IO(e) => e,
+            Error::NotFound => io::Error::new(io::ErrorKind::NotFound, "no persisted state found"),
+            Error::Serialization(e) => io::Error::new(io::ErrorKind::InvalidData, e),
             e => io::Error::other(e),
         }
     }
@@ -52,6 +57,7 @@ impl fmt::Display for Error {
         match self {
             Error::AppData(name) => write!(f, "unable to open storage for {name}"),
             Error::IO(e) => e.fmt(f),
+            Error::NotFound => write!(f, "no persisted state found"),
             Error::Serialization(e) => e.fmt(f),
         }
     }
@@ -84,45 +90,66 @@ impl Provider {
     /// Attempts to deserialize directly as `T` first. If that fails, falls back to
     /// deserializing as a legacy `Abseil<T>` wrapper and extracts the inner state.
     /// Also checks for a legacy `persist.json` file if the primary file is missing.
-    /// Returns `T::default()` if no persisted state exists.
+    /// Returns [`Error::NotFound`] if no persisted state exists.
     pub fn load<T>(&self) -> Result<T>
     where
-        T: Default + for<'a> Deserialize<'a>,
+        T: for<'a> Deserialize<'a>,
     {
         let dir = self.location.path();
         let path = dir.join(self.filename());
 
-        if path.exists() {
-            let text = fs::read_to_string(path)?;
-            return stringify::from_str(&text)
-                .or_else(|_| stringify::from_str::<Abseil<T>>(&text).map(Abseil::into_inner))
-                .map_err(Into::into);
+        match self.try_load_file::<T>(&path) {
+            Ok(state) => Ok(state),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let legacy_path = dir.join("persist.json");
+                match self.try_load_file::<T>(&legacy_path) {
+                    Ok(state) => Ok(state),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Err(Error::NotFound),
+                    Err(e) => Err(e.into()),
+                }
+            }
+            Err(e) => Err(e.into()),
         }
+    }
 
-        let legacy_path = dir.join("persist.json");
-        if legacy_path.exists() {
-            let text = fs::read_to_string(legacy_path)?;
-            return stringify::from_str(&text)
-                .or_else(|_| stringify::from_str::<Abseil<T>>(&text).map(Abseil::into_inner))
-                .map_err(Into::into);
+    /// Loads persisted state from storage, returning `T::default()` if none exists.
+    ///
+    /// Behaves like [`load`](Provider::load) but returns a default value instead
+    /// of an error when no persisted state is found.
+    pub fn load_or_default<T>(&self) -> Result<T>
+    where
+        T: Default + for<'a> Deserialize<'a>,
+    {
+        match self.load() {
+            Ok(state) => Ok(state),
+            Err(Error::NotFound) => Ok(Default::default()),
+            Err(e) => Err(e),
         }
+    }
 
-        Ok(Default::default())
+    fn try_load_file<T: for<'a> Deserialize<'a>>(&self, path: &std::path::Path) -> io::Result<T> {
+        let text = fs::read_to_string(path)?;
+        stringify::from_str(&text)
+            .or_else(|_| stringify::from_str::<Abseil<T>>(&text).map(Abseil::into_inner))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Serializes and writes the given state to the storage file.
     ///
-    /// Creates the storage directory if it does not exist.
+    /// Creates the storage directory if it does not exist. Writes are atomic:
+    /// a temporary file is written and renamed to prevent corruption on crash.
     pub fn store(&self, state: impl Serialize) -> Result<()> {
         let dir = self.location.path();
-
-        if !dir.exists() {
-            fs::create_dir_all(dir)?;
-        }
+        fs::create_dir_all(dir)?;
 
         let path = dir.join(self.filename());
         let text = self.stringify(state)?;
-        Ok(fs::write(path, text)?)
+
+        let mut tmp = NamedTempFile::new_in(dir)?;
+        io::Write::write_all(&mut tmp, text.as_bytes())?;
+        tmp.persist(path).map_err(|e| io::Error::other(e.error))?;
+
+        Ok(())
     }
 
     /// Returns a reference to the resolved storage [`Location`].
@@ -246,11 +273,11 @@ impl ProviderBuilder {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Abseil<T> {
-    pub state: T,
+    state: T,
 }
 
 impl<T> Abseil<T> {
-    pub fn into_inner(self) -> T {
+    fn into_inner(self) -> T {
         self.state
     }
 }
@@ -347,11 +374,20 @@ mod tests {
     }
 
     #[test]
-    fn load_returns_default_when_no_file() {
+    fn load_errors_when_no_file() {
         let dir = tempfile::tempdir().unwrap();
         let provider = test_provider(dir.path());
 
-        let loaded: AppState = provider.load().unwrap();
+        let err = provider.load::<AppState>().unwrap_err();
+        assert!(matches!(err, Error::NotFound));
+    }
+
+    #[test]
+    fn load_or_default_returns_default_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        let loaded: AppState = provider.load_or_default().unwrap();
         assert_eq!(loaded, AppState::default());
     }
 
@@ -501,6 +537,9 @@ mod tests {
         let err = Error::AppData("my-app".into());
         assert_eq!(err.to_string(), "unable to open storage for my-app");
 
+        let err = Error::NotFound;
+        assert_eq!(err.to_string(), "no persisted state found");
+
         let err = Error::IO(io::Error::new(io::ErrorKind::BrokenPipe, "pipe"));
         assert!(err.to_string().contains("pipe"));
 
@@ -514,6 +553,14 @@ mod tests {
         let err: Error = io_err.into();
         let converted: io::Error = err.into();
         assert_eq!(converted.kind(), io::ErrorKind::NotFound);
+
+        let err = Error::NotFound;
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), io::ErrorKind::NotFound);
+
+        let err = Error::Serialization(stringify::from_str::<AppState>("bad").unwrap_err());
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), io::ErrorKind::InvalidData);
 
         let err = Error::AppData("test".into());
         let io_err: io::Error = err.into();

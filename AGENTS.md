@@ -12,7 +12,7 @@
 ```bash
 cargo check          # Type check without building
 cargo build          # Build the library
-cargo test           # Run tests (13 unit tests)
+cargo test           # Run tests (14 unit tests)
 cargo fmt            # Format code
 cargo fmt -- --check # Verify formatting
 cargo clippy         # Lint (if clippy is installed)
@@ -27,7 +27,8 @@ Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). N
 ### Core Components
 
 1. **`Provider`** - Main entry point. Created via `Provider::builder(app).build()` (returns `Result<Provider>`). Holds a resolved `Location` internally. Methods:
-   - `load<T>()` → Deserializes state from storage file; tries direct `T` deserialization first, falls back to `Abseil<T>` for backward compat, falls back to legacy `persist.json` if new file missing, returns `Default::default()` if nothing exists. Returns `Result<T>`.
+   - `load<T>()` → Deserializes state from storage file; tries direct `T` deserialization first, falls back to `Abseil<T>` for backward compat, falls back to legacy `persist.json` if new file missing, returns `Error::NotFound` if nothing exists. Returns `Result<T>`.
+   - `load_or_default<T>()` → Same as `load()` but returns `Default::default()` instead of `Error::NotFound` when no persisted state exists. Returns `Result<T>`.
    - `store(state)` → Serializes and writes state to storage file
    - `location()` → Returns `&Location` with the resolved storage directory
    - `builder(app)` → Returns `ProviderBuilder` for configuration
@@ -45,7 +46,7 @@ Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). N
 
 4. **`Abseil<T>`** - Legacy wrapper struct (`pub(crate)`) with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
 
-5. **`Error`** - Unified error type: `AppData(String)` | `IO(io::Error)` | `Serialization(stringify::Error)`
+5. **`Error`** - Unified error type: `AppData(String)` | `IO(io::Error)` | `NotFound` | `Serialization(stringify::Error)`
 
 6. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
 
@@ -84,11 +85,13 @@ toml = ["dep:toml"]   # Only works when json is disabled
 - Custom filename can be set via `with_filename()`
 
 ### State Wrapper (Legacy)
-`Abseil<T>` exists for backward-compatible deserialization only. `load()` first tries to deserialize as `T` directly; if that fails, it tries `Abseil<T>` and extracts the inner state. `store()` writes `T` directly without wrapping.
+`Abseil<T>` exists for backward-compatible deserialization only. `load()` first tries to deserialize as `T` directly; if that fails, it tries `Abseil<T>` and extracts the inner state. `store()` always writes `T` directly without wrapping.
 
 ### Error Handling
 - `Error` implements `Display`, `std::error::Error`, and bidirectional conversion with `io::Error`
-- `From<Error> for io::Error` converts non-IO errors via `io::Error::other()`
+- `Error::NotFound` converts to `io::ErrorKind::NotFound`
+- `Error::Serialization` converts to `io::ErrorKind::InvalidData`
+- `Error::AppData` converts via `io::Error::other()`
 - Custom `stringify::Error` wraps format-specific errors
 
 ### Builder Pattern
@@ -101,13 +104,8 @@ toml = ["dep:toml"]   # Only works when json is disabled
 | `directories` | Platform-specific data directories |
 | `serde` | Serialization framework |
 | `serde_json` | JSON format (optional, default) |
+| `tempfile` | Atomic file writes (temp file + rename) |
 | `toml` | TOML format (optional) |
-
-### Dev Dependencies
-
-| Crate | Purpose |
-|-------|---------|
-| `tempfile` | Temporary directories for tests |
 
 ## Gotchas
 
@@ -119,11 +117,11 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 4. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
 
-5. **Trait bound differences**: `load<T>()` requires `T: Default + for<'a> Deserialize<'a>` with JSON, but `T: Default + DeserializeOwned` with TOML. This can cause compilation errors when switching features.
+5. **Trait bound differences**: `load<T>()` requires `T: for<'a> Deserialize<'a>` with JSON, but `T: DeserializeOwned` with TOML. `load_or_default<T>()` additionally requires `T: Default`. This can cause compilation errors when switching features.
 
 6. **Compact by default**: Providers are compact by default. Use `Provider::builder(app).pretty()` for pretty-printed output.
 
-7. **Tests**: 13 unit tests covering roundtrip, backward compat, builder config, and errors. All use `tempfile` to avoid polluting real directories.
+7. **Tests**: 14 unit tests covering roundtrip, backward compat, builder config, and errors. All use `tempfile` to avoid polluting real directories.
 
 8. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
 

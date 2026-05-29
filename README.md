@@ -26,8 +26,11 @@ let provider = Provider::builder("my-app").build()?;
 // Store state
 provider.store(&my_state)?;
 
-// Load state (returns Default if no saved state exists)
+// Load state (errors if no saved state exists)
 let state: MyState = provider.load()?;
+
+// Or load with a default fallback
+let state: MyState = provider.load_or_default()?;
 ```
 
 ### Builder Pattern
