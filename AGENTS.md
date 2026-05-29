@@ -12,7 +12,7 @@
 ```bash
 cargo check          # Type check without building
 cargo build          # Build the library
-cargo test           # Run tests (currently none exist)
+cargo test           # Run tests (13 unit tests)
 cargo fmt            # Format code
 cargo fmt -- --check # Verify formatting
 cargo clippy         # Lint (if clippy is installed)
@@ -22,7 +22,7 @@ cargo clippy         # Lint (if clippy is installed)
 
 ## Architecture
 
-Two-file library: `src/lib.rs` (~260 lines) and `src/location.rs` (~40 lines). No binaries, no examples, no tests.
+Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). No binaries, no examples. 13 unit tests inline in `lib.rs`.
 
 ### Core Components
 
@@ -102,6 +102,12 @@ toml = ["dep:toml"]   # Only works when json is disabled
 | `serde` | Serialization framework |
 | `serde_json` | JSON format (optional, default) |
 | `toml` | TOML format (optional) |
+
+### Dev Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `tempfile` | Temporary directories for tests |
 
 ## Gotchas
 
