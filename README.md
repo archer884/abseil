@@ -64,6 +64,31 @@ let provider = Provider::builder("my-app")
 | macOS   | `~/Library/Application Support/my-app/`     | `~/Library/Application Support/my-app/`     |
 | Windows | `C:\Users\{user}\AppData\Local\my-app\`    | `C:\Users\{user}\AppData\Roaming\my-app\`  |
 
+## Changes since 0.4.0
+
+### Breaking changes
+
+- `load()` now returns `T` directly instead of `Abseil<T>`. A new `load_or_default()` method returns `T::default()` when no persisted state exists.
+- `store()` writes `T` directly—state is no longer wrapped in `Abseil<T>`.
+- Providers are compact by default. Call `.pretty()` on the builder for human-readable output.
+- `PersistBuilder` renamed to `ProviderBuilder`.
+- `Provider::new()` removed—use `Provider::builder()` instead.
+- `Error::AppData` now holds a `String` instead of a `Provider`.
+- Default storage filename is now `storage.json` (or `storage.toml`) instead of `persist.json`.
+- Updated `directories` from v5 to v6; updated `toml` from v0.8 to v1.1.
+- Dropped `chrono` and `either` dependencies.
+- Edition bumped to Rust 2024.
+
+### New features
+
+- `Error::NotFound` variant for missing persisted state.
+- `Location` type with a public `path()` method; `Provider::location()` returns `&Location`.
+- `with_filename()` builder method to customize the storage filename.
+- `with_path()` builder method to use an explicit directory, bypassing platform resolution.
+- `use_config_dir()` builder method to store in the config directory instead of the data directory.
+- Atomic writes via `tempfile` to prevent corruption on crash.
+- `load()` falls back to legacy `persist.json` for backward compatibility with older versions.
+
 ## License
 
 MIT/Apache-2.0

@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod location;
 
 use std::{fmt, fs, io, path::PathBuf};
