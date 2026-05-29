@@ -40,6 +40,7 @@ Two-file library: `src/lib.rs` (~260 lines) and `src/location.rs` (~40 lines). N
    - `pretty()` → Enable pretty-printing (default is compact)
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
    - `use_config_dir()` → Store in config directory instead of data directory
+   - `with_path(path)` → Use an explicit directory, bypassing platform-specific resolution entirely
    - `build()` → Resolves `ProjectDirs`, returns `Result<Provider>`
 
 4. **`Abseil<T>`** - Legacy wrapper struct (`pub(crate)`) with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
@@ -116,7 +117,7 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 6. **Compact by default**: Providers are compact by default. Use `Provider::builder(app).pretty()` for pretty-printed output.
 
-7. **No tests exist**: The library has zero unit tests or doc tests. Any changes should include tests.
+7. **Tests**: 13 unit tests covering roundtrip, backward compat, builder config, and errors. All use `tempfile` to avoid polluting real directories.
 
 8. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
 
@@ -130,7 +131,6 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 ## What's Missing (for contributors)
 
-- No unit tests
 - No examples directory
 - No CI/CD configuration
 - No MSRV (minimum supported Rust version) policy

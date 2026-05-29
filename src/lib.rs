@@ -1,11 +1,11 @@
 mod location;
 
-use std::{fmt, fs, io};
+use std::{fmt, fs, io, path::PathBuf};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-use crate::location::{Dir, Location};
+use crate::location::{Location, Root, RootLazy};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -160,23 +160,33 @@ pub struct ProviderBuilder {
     application: String,
     pretty: bool,
     filename: Option<String>,
-    dir: Dir,
+    root: RootLazy,
 }
 
 impl ProviderBuilder {
     /// Resolves the storage location and returns a configured [`Provider`].
     ///
-    /// Returns [`Error::AppData`] if the platform data directory cannot be determined.
+    /// Returns [`Error::AppData`] if the platform data directory cannot be determined
+    /// and no explicit path was set via [`with_path`](ProviderBuilder::with_path).
     pub fn build(self) -> Result<Provider> {
-        let directories = ProjectDirs::from(
-            self.qualifier.as_deref().unwrap_or(""),
-            self.organization.as_deref().unwrap_or(""),
-            &self.application,
-        )
-        .ok_or(Error::AppData(self.application))?;
+        let root = match self.root {
+            RootLazy::Path(path) => Root::Path(path),
+            RootLazy::PlatformData | RootLazy::PlatformConfig => {
+                let directories = ProjectDirs::from(
+                    self.qualifier.as_deref().unwrap_or(""),
+                    self.organization.as_deref().unwrap_or(""),
+                    &self.application,
+                )
+                .ok_or(Error::AppData(self.application))?;
+                match self.root {
+                    RootLazy::PlatformConfig => Root::PlatformConfig(directories),
+                    _ => Root::PlatformData(directories),
+                }
+            }
+        };
 
         Ok(Provider {
-            location: Location::new(directories, self.dir),
+            location: Location::new(root),
             pretty: self.pretty,
             filename: self.filename,
         })
@@ -217,7 +227,18 @@ impl ProviderBuilder {
     /// Store configuration in the config directory instead of the data directory.
     pub fn use_config_dir(self) -> Self {
         Self {
-            dir: Dir::Config,
+            root: RootLazy::PlatformConfig,
+            ..self
+        }
+    }
+
+    /// Use an explicit storage path instead of the platform-specific data directory.
+    ///
+    /// When set, this overrides the platform directory resolution entirely,
+    /// regardless of any qualifier, organization, or [`use_config_dir`] setting.
+    pub fn with_path(self, path: impl Into<PathBuf>) -> Self {
+        Self {
+            root: RootLazy::Path(path.into()),
             ..self
         }
     }
@@ -290,5 +311,220 @@ mod stringify {
 
     pub fn from_str<T: DeserializeOwned>(s: &str) -> Result<T> {
         toml::from_str(s).map_err(Error::Deserialization)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+    struct AppState {
+        name: String,
+        count: u32,
+    }
+
+    fn test_provider(dir: &std::path::Path) -> Provider {
+        Provider::builder("test-app")
+            .with_path(dir)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn store_and_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        let state = AppState {
+            name: "hello".into(),
+            count: 42,
+        };
+        provider.store(&state).unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(state, loaded);
+    }
+
+    #[test]
+    fn load_returns_default_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(loaded, AppState::default());
+    }
+
+    #[test]
+    fn load_wrapped_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+        let path = dir.path().join(DEFAULT_FILENAME);
+
+        fs::write(&path, r#"{"state": {"name": "wrapped", "count": 7}}"#).unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(
+            loaded,
+            AppState {
+                name: "wrapped".into(),
+                count: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn load_wrapped_payload_with_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+        let path = dir.path().join(DEFAULT_FILENAME);
+
+        fs::write(
+            &path,
+            r#"{"timestamp": "2024-01-01T00:00:00Z", "state": {"name": "legacy", "count": 3}}"#,
+        )
+        .unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(
+            loaded,
+            AppState {
+                name: "legacy".into(),
+                count: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn load_bare_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+        let path = dir.path().join(DEFAULT_FILENAME);
+
+        fs::write(&path, r#"{"name": "bare", "count": 5}"#).unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(
+            loaded,
+            AppState {
+                name: "bare".into(),
+                count: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn load_falls_back_to_legacy_persist_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        fs::write(
+            dir.path().join("persist.json"),
+            r#"{"name": "legacy", "count": 1}"#,
+        )
+        .unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(
+            loaded,
+            AppState {
+                name: "legacy".into(),
+                count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn load_prefers_primary_over_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+        let path = dir.path().join(DEFAULT_FILENAME);
+
+        fs::write(&path, r#"{"name": "primary", "count": 10}"#).unwrap();
+        fs::write(
+            dir.path().join("persist.json"),
+            r#"{"name": "legacy", "count": 1}"#,
+        )
+        .unwrap();
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(
+            loaded,
+            AppState {
+                name: "primary".into(),
+                count: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn custom_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Provider::builder("test-app")
+            .with_path(dir.path())
+            .with_filename("custom.json")
+            .build()
+            .unwrap();
+
+        let state = AppState {
+            name: "custom".into(),
+            count: 99,
+        };
+        provider.store(&state).unwrap();
+
+        assert!(dir.path().join("custom.json").exists());
+
+        let loaded: AppState = provider.load().unwrap();
+        assert_eq!(state, loaded);
+    }
+
+    #[test]
+    fn store_creates_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+        let provider = test_provider(&nested);
+
+        provider.store(&AppState::default()).unwrap();
+        assert!(nested.exists());
+    }
+
+    #[test]
+    fn location_returns_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        assert_eq!(provider.location().path(), dir.path());
+    }
+
+    #[test]
+    fn error_display() {
+        let err = Error::AppData("my-app".into());
+        assert_eq!(err.to_string(), "unable to open storage for my-app");
+
+        let err = Error::IO(io::Error::new(io::ErrorKind::BrokenPipe, "pipe"));
+        assert!(err.to_string().contains("pipe"));
+
+        let err = Error::Serialization(stringify::from_str::<AppState>("not json").unwrap_err());
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn error_into_io_error() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "gone");
+        let err: Error = io_err.into();
+        let converted: io::Error = err.into();
+        assert_eq!(converted.kind(), io::ErrorKind::NotFound);
+
+        let err = Error::AppData("test".into());
+        let io_err: io::Error = err.into();
+        assert_eq!(io_err.kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn provider_display_shows_location() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = test_provider(dir.path());
+
+        assert_eq!(provider.to_string(), dir.path().display().to_string());
     }
 }
