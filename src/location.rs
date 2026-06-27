@@ -6,7 +6,8 @@ use directories::ProjectDirs;
 /// The resolved storage directory for an application.
 ///
 /// Wraps platform-specific directory resolution from the `directories` crate,
-/// or holds an explicit path override set via [`ProviderBuilder::with_path`].
+/// or holds an explicit path override set via
+/// [`ProviderBuilder::with_path`](crate::ProviderBuilder::with_path).
 #[derive(Debug, Clone)]
 pub struct Location {
     root: Root,

@@ -118,6 +118,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 [XDG Base Directory Specification]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
 
+### Migration from ~/Library
+
+If you ship `use_xdg_layout()` to users who previously stored data at the legacy macOS path (`~/Library/Application Support/...`), those users will silently see an empty state on first launch. To relocate their data on first run, enable the `xdg-migration` Cargo feature and call `with_migrate()` on the builder:
+
+```toml
+[dependencies]
+abseil = { version = "0.5", features = ["xdg-migration"] }
+```
+
+```rust
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use abseil::Provider;
+
+    let _provider = Provider::builder("my-app")
+        .use_xdg_layout()
+        .with_migrate()
+        .build()?;
+
+    Ok(())
+}
+```
+
+On macOS, `build()` will then:
+
+1. Check whether the XDG path is empty.
+2. If it is, look for the primary storage file at the legacy `~/Library/Application Support/<app>/` location and rename it to the XDG path.
+3. If the primary isn't there, fall back to the legacy `persist.json` file and rename that to `<xdg>/persist.json`. The existing `load()` fallback finds it.
+4. If a file with the target name already exists at the XDG path, leave it alone — the destination always wins.
+
+The migration is idempotent: subsequent `build()` calls see the file at the XDG path and do nothing.
+
+**Recommended lifecycle**: enable the feature and call `with_migrate()` for a few releases while users upgrade, then drop the call (and disable the feature) once enough time has passed. The library will continue to function identically; only the one-time move stops happening.
+
+The migration is a no-op when:
+
+- the `xdg-migration` feature is disabled,
+- `use_xdg_layout()` is not called,
+- running on non-macOS (the XDG layout is itself a no-op there), or
+- neither the primary file nor `persist.json` exists at the legacy location.
+
 ## Changes since 0.4.0
 
 ### Breaking changes
@@ -141,6 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `with_path()` builder method to use an explicit directory, bypassing platform resolution.
 - `use_config_dir()` builder method to store in the config directory instead of the data directory.
 - `use_xdg_layout()` builder method to resolve to XDG-style paths (`~/.local/share`, `~/.config`) on macOS instead of `~/Library/Application Support`. No-op on other platforms.
+- `xdg-migration` Cargo feature with `with_migrate()` builder method to one-shot move storage data from `~/Library/Application Support` to the XDG path on macOS. Designed to be enabled for a few releases and then disabled.
 - Atomic writes via `tempfile` to prevent corruption on crash.
 - `load()` falls back to legacy `persist.json` for backward compatibility with older versions.
 

@@ -1,6 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-mod location;
+pub mod location;
+#[cfg(feature = "xdg-migration")]
+mod migration;
 
 use std::{fmt, fs, io, path::PathBuf};
 
@@ -190,6 +192,8 @@ pub struct ProviderBuilder {
     pretty: bool,
     filename: Option<String>,
     root: RootLazy,
+    #[cfg(feature = "xdg-migration")]
+    migrate: bool,
 }
 
 impl ProviderBuilder {
@@ -198,6 +202,13 @@ impl ProviderBuilder {
     /// Returns [`Error::AppData`] if the platform data directory cannot be determined
     /// and no explicit path was set via [`with_path`](ProviderBuilder::with_path).
     pub fn build(self) -> Result<Provider> {
+        #[cfg(feature = "xdg-migration")]
+        let xdg_kind = match &self.root {
+            RootLazy::XdgData => Some(XdgKind::Data),
+            RootLazy::XdgConfig => Some(XdgKind::Config),
+            _ => None,
+        };
+
         let root = match self.root {
             RootLazy::Path(path) => Root::Path(path),
             RootLazy::PlatformData | RootLazy::PlatformConfig => {
@@ -247,6 +258,28 @@ impl ProviderBuilder {
                 }
             }
         };
+
+        #[cfg(feature = "xdg-migration")]
+        if self.migrate
+            && let (Some(kind), Root::Xdg(xdg)) = (xdg_kind, &root)
+            && cfg!(target_os = "macos")
+        {
+            let legacy = ProjectDirs::from(
+                self.qualifier.as_deref().unwrap_or(""),
+                self.organization.as_deref().unwrap_or(""),
+                &self.application,
+            )
+            .ok_or(Error::AppData(self.application.clone()))?;
+            let legacy = match kind {
+                XdgKind::Data => legacy.data_dir(),
+                XdgKind::Config => legacy.config_dir(),
+            };
+            migration::migrate_legacy_to_xdg(
+                xdg,
+                legacy,
+                self.filename.as_deref().unwrap_or(DEFAULT_FILENAME),
+            )?;
+        }
 
         Ok(Provider {
             location: Location::new(root),
@@ -331,13 +364,46 @@ impl ProviderBuilder {
     /// Use an explicit storage path instead of the platform-specific data directory.
     ///
     /// When set, this overrides the platform directory resolution entirely,
-    /// regardless of any qualifier, organization, [`use_config_dir`], or
-    /// [`use_xdg_layout`] setting.
+    /// regardless of any qualifier, organization, [`use_config_dir`](Self::use_config_dir),
+    /// or [`use_xdg_layout`](Self::use_xdg_layout) setting.
     pub fn with_path(self, path: impl Into<PathBuf>) -> Self {
         Self {
             root: RootLazy::Path(path.into()),
             ..self
         }
+    }
+
+    /// On macOS, before the provider is built, move any storage file found at
+    /// the legacy `~/Library/Application Support` location to the XDG path
+    /// resolved by [`use_xdg_layout`](Self::use_xdg_layout).
+    ///
+    /// Migration moves the primary storage file (the one configured via
+    /// [`with_filename`](Self::with_filename) or the default) from the legacy
+    /// location. If the primary is not present at the legacy location, the
+    /// `persist.json` legacy file is moved instead. An existing file at the
+    /// destination is never overwritten. The migration is idempotent.
+    ///
+    /// This is a one-shot upgrade aid. The recommended pattern is to enable
+    /// it for a few releases while users upgrade, then drop the call (and
+    /// disable the Cargo feature) once enough time has passed.
+    ///
+    /// No-op when:
+    /// - the `xdg-migration` Cargo feature is disabled,
+    /// - [`use_xdg_layout`](Self::use_xdg_layout) has not been called,
+    /// - on non-macOS platforms (the XDG layout is a no-op there), or
+    /// - neither the primary file nor `persist.json` exists at the legacy
+    ///   location.
+    ///
+    /// Returns [`Error::IO`] from [`build`](Self::build) if the file rename
+    /// itself fails.
+    pub fn with_migrate(self) -> Self {
+        #[cfg(feature = "xdg-migration")]
+        return Self {
+            migrate: true,
+            ..self
+        };
+        #[cfg(not(feature = "xdg-migration"))]
+        return self;
     }
 }
 
@@ -727,6 +793,156 @@ mod tests {
     fn with_path_overrides_xdg_layout() {
         let dir = tempfile::tempdir().unwrap();
         let provider = Provider::builder("my-app")
+            .use_xdg_layout()
+            .with_path(dir.path())
+            .build()
+            .unwrap();
+        assert_eq!(provider.location().path(), dir.path());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_moves_primary_when_only_primary_at_legacy() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("storage.json"), r#"{"a":1}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert!(!legacy.path().join("storage.json").exists());
+        assert_eq!(
+            fs::read_to_string(xdg.path().join("storage.json")).unwrap(),
+            r#"{"a":1}"#
+        );
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_moves_persist_json_when_only_persist_at_legacy() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("persist.json"), r#"{"a":1}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert!(!legacy.path().join("persist.json").exists());
+        assert_eq!(
+            fs::read_to_string(xdg.path().join("persist.json")).unwrap(),
+            r#"{"a":1}"#
+        );
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_prefers_primary_over_persist_json() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("storage.json"), r#"{"a":1}"#).unwrap();
+        fs::write(legacy.path().join("persist.json"), r#"{"b":2}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert!(!legacy.path().join("storage.json").exists());
+        assert!(legacy.path().join("persist.json").exists());
+        assert_eq!(
+            fs::read_to_string(xdg.path().join("storage.json")).unwrap(),
+            r#"{"a":1}"#
+        );
+        assert!(!xdg.path().join("persist.json").exists());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_skips_primary_when_xdg_already_has_it() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("storage.json"), r#"{"legacy":true}"#).unwrap();
+        fs::write(xdg.path().join("storage.json"), r#"{"xdg":true}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert!(legacy.path().join("storage.json").exists());
+        assert_eq!(
+            fs::read_to_string(xdg.path().join("storage.json")).unwrap(),
+            r#"{"xdg":true}"#
+        );
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_skips_persist_json_when_xdg_already_has_it() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("persist.json"), r#"{"legacy":true}"#).unwrap();
+        fs::write(xdg.path().join("persist.json"), r#"{"xdg":true}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert!(legacy.path().join("persist.json").exists());
+        assert_eq!(
+            fs::read_to_string(xdg.path().join("persist.json")).unwrap(),
+            r#"{"xdg":true}"#
+        );
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_creates_xdg_dir_if_missing() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg_root = tempfile::tempdir().unwrap();
+        let xdg = xdg_root.path().join("subdir").join("nested");
+        fs::write(legacy.path().join("storage.json"), r#"{"a":1}"#).unwrap();
+        migrate_legacy_to_xdg(&xdg, legacy.path(), "storage.json").unwrap();
+        assert!(xdg.is_dir());
+        assert!(xdg.join("storage.json").exists());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_no_op_when_legacy_empty() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "storage.json").unwrap();
+        assert_eq!(fs::read_dir(xdg.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_no_op_when_paths_equal() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("storage.json"), r#"{"a":1}"#).unwrap();
+        migrate_legacy_to_xdg(dir.path(), dir.path(), "storage.json").unwrap();
+        assert!(dir.path().join("storage.json").exists());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn migrate_uses_custom_primary_filename() {
+        use crate::migration::migrate_legacy_to_xdg;
+        let legacy = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::write(legacy.path().join("settings.json"), r#"{"a":1}"#).unwrap();
+        migrate_legacy_to_xdg(xdg.path(), legacy.path(), "settings.json").unwrap();
+        assert!(xdg.path().join("settings.json").exists());
+        assert!(!xdg.path().join("storage.json").exists());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn with_migrate_no_op_without_use_xdg_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Provider::builder("my-app")
+            .with_migrate()
+            .with_path(dir.path())
+            .build()
+            .unwrap();
+        assert_eq!(provider.location().path(), dir.path());
+    }
+
+    #[cfg(feature = "xdg-migration")]
+    #[test]
+    fn with_migrate_composes_with_use_xdg_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Provider::builder("my-app")
+            .with_migrate()
             .use_xdg_layout()
             .with_path(dir.path())
             .build()
