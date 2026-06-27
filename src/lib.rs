@@ -8,7 +8,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
-use crate::location::{Location, Root, RootLazy};
+use crate::location::{Location, Root, RootLazy, XdgKind, xdg_path};
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -206,10 +206,44 @@ impl ProviderBuilder {
                     self.organization.as_deref().unwrap_or(""),
                     &self.application,
                 )
-                .ok_or(Error::AppData(self.application))?;
+                .ok_or(Error::AppData(self.application.clone()))?;
                 match self.root {
                     RootLazy::PlatformConfig => Root::PlatformConfig(directories),
                     _ => Root::PlatformData(directories),
+                }
+            }
+            RootLazy::XdgData | RootLazy::XdgConfig => {
+                let kind = match self.root {
+                    RootLazy::XdgConfig => XdgKind::Config,
+                    _ => XdgKind::Data,
+                };
+                if cfg!(target_os = "macos") {
+                    let xdg_home = std::env::var_os(kind.env_var())
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from);
+                    let home = std::env::var_os("HOME")
+                        .filter(|s| !s.is_empty())
+                        .map(PathBuf::from);
+                    let path = xdg_path(
+                        kind,
+                        &self.application,
+                        xdg_home.as_deref(),
+                        home.as_deref(),
+                    )
+                    .ok_or(Error::AppData(self.application.clone()))?;
+                    Root::Xdg(path)
+                } else {
+                    let directories = ProjectDirs::from(
+                        self.qualifier.as_deref().unwrap_or(""),
+                        self.organization.as_deref().unwrap_or(""),
+                        &self.application,
+                    )
+                    .ok_or(Error::AppData(self.application.clone()))?;
+                    let path = match kind {
+                        XdgKind::Data => directories.data_dir().to_path_buf(),
+                        XdgKind::Config => directories.config_dir().to_path_buf(),
+                    };
+                    Root::Xdg(path)
                 }
             }
         };
@@ -254,17 +288,51 @@ impl ProviderBuilder {
     }
 
     /// Store configuration in the config directory instead of the data directory.
+    ///
+    /// Composes with [`use_xdg_layout`](Self::use_xdg_layout): the config/data
+    /// choice is preserved when switching between platform and XDG resolution.
     pub fn use_config_dir(self) -> Self {
-        Self {
-            root: RootLazy::PlatformConfig,
-            ..self
-        }
+        let root = match self.root {
+            RootLazy::PlatformData | RootLazy::XdgData => RootLazy::PlatformConfig,
+            RootLazy::PlatformConfig | RootLazy::XdgConfig => self.root,
+            RootLazy::Path(_) => self.root,
+        };
+        Self { root, ..self }
+    }
+
+    /// Use an XDG-style directory layout on macOS instead of `~/Library/Application Support`.
+    ///
+    /// On macOS this resolves the data directory to
+    /// `$XDG_DATA_HOME/<app>` (defaulting to `~/.local/share/<app>`) and the
+    /// config directory to `$XDG_CONFIG_HOME/<app>` (defaulting to
+    /// `~/.config/<app>`), matching the [XDG Base Directory Specification].
+    /// The `XDG_DATA_HOME` and `XDG_CONFIG_HOME` environment variables are
+    /// respected when set.
+    ///
+    /// On non-macOS platforms this is a no-op: the resolved path is identical
+    /// to the platform default (`ProjectDirs::data_dir()` /
+    /// `ProjectDirs::config_dir()`). Use [`with_path`](Self::with_path) to
+    /// override the location on those platforms.
+    ///
+    /// Composes with [`use_config_dir`](Self::use_config_dir) to select the
+    /// config directory under the XDG layout. If [`with_path`](Self::with_path)
+    /// is also set, `with_path` wins.
+    ///
+    /// [XDG Base Directory Specification]: https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+    pub fn use_xdg_layout(self) -> Self {
+        let root = match self.root {
+            RootLazy::PlatformData => RootLazy::XdgData,
+            RootLazy::PlatformConfig => RootLazy::XdgConfig,
+            other => other,
+        };
+        Self { root, ..self }
     }
 
     /// Use an explicit storage path instead of the platform-specific data directory.
     ///
     /// When set, this overrides the platform directory resolution entirely,
-    /// regardless of any qualifier, organization, or [`use_config_dir`] setting.
+    /// regardless of any qualifier, organization, [`use_config_dir`], or
+    /// [`use_xdg_layout`] setting.
     pub fn with_path(self, path: impl Into<PathBuf>) -> Self {
         Self {
             root: RootLazy::Path(path.into()),
@@ -522,7 +590,7 @@ mod tests {
         let nested = dir.path().join("a").join("b").join("c");
         let provider = test_provider(&nested);
 
-        provider.store(&AppState::default()).unwrap();
+        provider.store(AppState::default()).unwrap();
         assert!(nested.exists());
     }
 
@@ -575,5 +643,94 @@ mod tests {
         let provider = test_provider(dir.path());
 
         assert_eq!(provider.to_string(), dir.path().display().to_string());
+    }
+
+    #[test]
+    fn xdg_path_data_default() {
+        let home = std::path::Path::new("/home/user");
+        let p = xdg_path(XdgKind::Data, "my-app", None, Some(home)).unwrap();
+        assert_eq!(
+            p,
+            std::path::PathBuf::from("/home/user/.local/share/my-app")
+        );
+    }
+
+    #[test]
+    fn xdg_path_config_default() {
+        let home = std::path::Path::new("/home/user");
+        let p = xdg_path(XdgKind::Config, "my-app", None, Some(home)).unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/home/user/.config/my-app"));
+    }
+
+    #[test]
+    fn xdg_path_honors_xdg_data_home() {
+        let xdg = std::path::Path::new("/srv/data");
+        let p = xdg_path(XdgKind::Data, "my-app", Some(xdg), None).unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/srv/data/my-app"));
+    }
+
+    #[test]
+    fn xdg_path_honors_xdg_config_home() {
+        let xdg = std::path::Path::new("/srv/cfg");
+        let p = xdg_path(XdgKind::Config, "my-app", Some(xdg), None).unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/srv/cfg/my-app"));
+    }
+
+    #[test]
+    fn xdg_path_prefers_xdg_home_over_default() {
+        let xdg = std::path::Path::new("/srv/data");
+        let home = std::path::Path::new("/home/user");
+        let p = xdg_path(XdgKind::Data, "my-app", Some(xdg), Some(home)).unwrap();
+        assert_eq!(p, std::path::PathBuf::from("/srv/data/my-app"));
+    }
+
+    #[test]
+    fn xdg_path_returns_none_without_base() {
+        assert!(xdg_path(XdgKind::Data, "my-app", None, None).is_none());
+        assert!(xdg_path(XdgKind::Config, "my-app", None, None).is_none());
+    }
+
+    #[test]
+    fn use_xdg_layout_composes_with_use_config_dir() {
+        let p1 = Provider::builder("my-app")
+            .use_xdg_layout()
+            .use_config_dir()
+            .with_path("/tmp")
+            .build()
+            .unwrap();
+        let p2 = Provider::builder("my-app")
+            .use_config_dir()
+            .use_xdg_layout()
+            .with_path("/tmp")
+            .build()
+            .unwrap();
+        assert_eq!(p1.location().path(), p2.location().path());
+    }
+
+    #[test]
+    fn use_xdg_layout_is_idempotent() {
+        let p1 = Provider::builder("my-app")
+            .use_xdg_layout()
+            .with_path("/tmp")
+            .build()
+            .unwrap();
+        let p2 = Provider::builder("my-app")
+            .use_xdg_layout()
+            .use_xdg_layout()
+            .with_path("/tmp")
+            .build()
+            .unwrap();
+        assert_eq!(p1.location().path(), p2.location().path());
+    }
+
+    #[test]
+    fn with_path_overrides_xdg_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = Provider::builder("my-app")
+            .use_xdg_layout()
+            .with_path(dir.path())
+            .build()
+            .unwrap();
+        assert_eq!(provider.location().path(), dir.path());
     }
 }
