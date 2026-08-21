@@ -21,3 +21,4 @@ toml = { version = "1.1.2", optional = true }
 default = ["json"]
 json = ["dep:serde_json"]
 toml = ["dep:toml"]
+locking = []

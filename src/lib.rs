@@ -172,6 +172,134 @@ impl Provider {
     }
 }
 
+/// An RAII guard holding an exclusive advisory lock over a [`Provider`]'s storage.
+///
+/// Requires the `locking` feature. Acquire via [`Provider::lock`] or
+/// [`Provider::try_lock`]. The lock is taken on a sidecar lock file (the
+/// storage filename plus a `.lock` suffix), whose inode is never replaced by
+/// the atomic renames [`store`](Provider::store) performs, so it stays
+/// meaningful across writes. The lock is released when the guard is dropped,
+/// and the kernel releases it automatically if the process dies, so stale
+/// locks cannot accumulate.
+///
+/// The guard dereferences to the [`Provider`], so a load-modify-store cycle
+/// can be performed through it without interleaving with other lock holders:
+///
+/// ```no_run
+/// use abseil::Provider;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Default, Serialize, Deserialize)]
+/// struct Count { total: u32 }
+///
+/// # fn main() -> abseil::Result<()> {
+/// let provider = Provider::builder("my-app").build()?;
+/// let guard = provider.lock()?;
+/// let mut count: Count = guard.load_or_default()?;
+/// count.total += 1;
+/// guard.store(&count)?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Locks are advisory: writers that bypass [`Provider::lock`] are unaffected.
+/// Acquiring the lock reentrantly on the same thread (e.g. calling
+/// [`update`](Provider::update) or [`lock`](Provider::lock) while a guard is
+/// held) blocks indefinitely.
+#[cfg(feature = "locking")]
+#[derive(Debug)]
+pub struct ProviderGuard<'a> {
+    provider: &'a Provider,
+    file: fs::File,
+}
+
+#[cfg(feature = "locking")]
+impl std::ops::Deref for ProviderGuard<'_> {
+    type Target = Provider;
+
+    fn deref(&self) -> &Provider {
+        self.provider
+    }
+}
+
+#[cfg(feature = "locking")]
+impl Drop for ProviderGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+#[cfg(feature = "locking")]
+impl Provider {
+    /// Acquires an exclusive advisory lock on this provider's storage,
+    /// blocking until any concurrent holder releases it.
+    ///
+    /// Requires the `locking` feature. Hold the returned
+    /// [`ProviderGuard`] across a load-modify-store cycle to prevent
+    /// concurrent writers from silently discarding each other's updates. The
+    /// lock is cross-process and released on drop or process death.
+    ///
+    /// Returns [`Error::IO`] if the lock file cannot be created or opened.
+    pub fn lock(&self) -> Result<ProviderGuard<'_>> {
+        let file = self.open_lock_file()?;
+        file.lock()?;
+        Ok(ProviderGuard {
+            provider: self,
+            file,
+        })
+    }
+
+    /// Attempts to acquire an exclusive advisory lock without blocking.
+    ///
+    /// Requires the `locking` feature. Behaves like [`lock`](Provider::lock)
+    /// except that it fails immediately with [`Error::IO`] whose kind is
+    /// [`io::ErrorKind::WouldBlock`] when the lock is already held.
+    pub fn try_lock(&self) -> Result<ProviderGuard<'_>> {
+        let file = self.open_lock_file()?;
+        file.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::WouldBlock => io::Error::from(io::ErrorKind::WouldBlock),
+            std::fs::TryLockError::Error(e) => e,
+        })?;
+        Ok(ProviderGuard {
+            provider: self,
+            file,
+        })
+    }
+
+    /// Runs an atomic read-modify-write cycle under this provider's lock.
+    ///
+    /// Requires the `locking` feature. Acquires the lock, loads persisted
+    /// state (or `T::default()` if none exists), applies `f`, stores the
+    /// result, releases the lock, and returns the final state. If `f` returns
+    /// an error, nothing is written and the error is propagated.
+    pub fn update<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Default + Serialize + for<'a> Deserialize<'a>,
+        F: FnOnce(&mut T) -> Result<()>,
+    {
+        let guard = self.lock()?;
+        let mut state: T = guard.load_or_default()?;
+        f(&mut state)?;
+        guard.store(&state)?;
+        Ok(state)
+    }
+
+    fn open_lock_file(&self) -> Result<fs::File> {
+        let dir = self.location.path();
+        fs::create_dir_all(dir)?;
+
+        let path = dir.join(format!("{}.lock", self.filename()));
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)?;
+
+        Ok(file)
+    }
+}
+
 impl fmt::Display for Provider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.location)
@@ -360,6 +488,16 @@ mod tests {
             .unwrap()
     }
 
+    fn write_fixture(path: &std::path::Path, payload: &impl Serialize) {
+        fs::write(path, stringify::to_string(payload).unwrap()).unwrap();
+    }
+
+    #[derive(Serialize)]
+    struct LegacyEnvelope {
+        timestamp: &'static str,
+        state: AppState,
+    }
+
     #[test]
     fn store_and_load_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
@@ -399,7 +537,15 @@ mod tests {
         let provider = test_provider(dir.path());
         let path = dir.path().join(DEFAULT_FILENAME);
 
-        fs::write(&path, r#"{"state": {"name": "wrapped", "count": 7}}"#).unwrap();
+        write_fixture(
+            &path,
+            &Abseil {
+                state: AppState {
+                    name: "wrapped".into(),
+                    count: 7,
+                },
+            },
+        );
 
         let loaded: AppState = provider.load().unwrap();
         assert_eq!(
@@ -417,11 +563,16 @@ mod tests {
         let provider = test_provider(dir.path());
         let path = dir.path().join(DEFAULT_FILENAME);
 
-        fs::write(
+        write_fixture(
             &path,
-            r#"{"timestamp": "2024-01-01T00:00:00Z", "state": {"name": "legacy", "count": 3}}"#,
-        )
-        .unwrap();
+            &LegacyEnvelope {
+                timestamp: "2024-01-01T00:00:00Z",
+                state: AppState {
+                    name: "legacy".into(),
+                    count: 3,
+                },
+            },
+        );
 
         let loaded: AppState = provider.load().unwrap();
         assert_eq!(
@@ -439,7 +590,13 @@ mod tests {
         let provider = test_provider(dir.path());
         let path = dir.path().join(DEFAULT_FILENAME);
 
-        fs::write(&path, r#"{"name": "bare", "count": 5}"#).unwrap();
+        write_fixture(
+            &path,
+            &AppState {
+                name: "bare".into(),
+                count: 5,
+            },
+        );
 
         let loaded: AppState = provider.load().unwrap();
         assert_eq!(
@@ -456,11 +613,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let provider = test_provider(dir.path());
 
-        fs::write(
-            dir.path().join("persist.json"),
-            r#"{"name": "legacy", "count": 1}"#,
-        )
-        .unwrap();
+        write_fixture(
+            &dir.path().join("persist.json"),
+            &AppState {
+                name: "legacy".into(),
+                count: 1,
+            },
+        );
 
         let loaded: AppState = provider.load().unwrap();
         assert_eq!(
@@ -478,12 +637,20 @@ mod tests {
         let provider = test_provider(dir.path());
         let path = dir.path().join(DEFAULT_FILENAME);
 
-        fs::write(&path, r#"{"name": "primary", "count": 10}"#).unwrap();
-        fs::write(
-            dir.path().join("persist.json"),
-            r#"{"name": "legacy", "count": 1}"#,
-        )
-        .unwrap();
+        write_fixture(
+            &path,
+            &AppState {
+                name: "primary".into(),
+                count: 10,
+            },
+        );
+        write_fixture(
+            &dir.path().join("persist.json"),
+            &AppState {
+                name: "legacy".into(),
+                count: 1,
+            },
+        );
 
         let loaded: AppState = provider.load().unwrap();
         assert_eq!(
@@ -522,7 +689,7 @@ mod tests {
         let nested = dir.path().join("a").join("b").join("c");
         let provider = test_provider(&nested);
 
-        provider.store(&AppState::default()).unwrap();
+        provider.store(AppState::default()).unwrap();
         assert!(nested.exists());
     }
 
@@ -575,5 +742,113 @@ mod tests {
         let provider = test_provider(dir.path());
 
         assert_eq!(provider.to_string(), dir.path().display().to_string());
+    }
+
+    #[cfg(feature = "locking")]
+    mod locking {
+        use super::*;
+
+        #[test]
+        fn try_lock_reports_would_block_while_held() {
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+
+            let guard = provider.lock().unwrap();
+            let err = provider.try_lock().unwrap_err();
+            assert!(matches!(err, Error::IO(ref e) if e.kind() == io::ErrorKind::WouldBlock));
+
+            drop(guard);
+            assert!(provider.try_lock().is_ok());
+        }
+
+        #[test]
+        fn lock_creates_sidecar_lock_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+
+            let _guard = provider.lock().unwrap();
+            assert!(dir.path().join(format!("{DEFAULT_FILENAME}.lock")).exists());
+        }
+
+        #[test]
+        fn guard_derefs_to_provider() {
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+
+            let guard = provider.lock().unwrap();
+            assert_eq!(guard.location().path(), dir.path());
+        }
+
+        #[test]
+        fn update_roundtrip() {
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+
+            let state = provider
+                .update(|s: &mut AppState| {
+                    s.name = "updated".into();
+                    s.count += 1;
+                    Ok(())
+                })
+                .unwrap();
+
+            assert_eq!(
+                state,
+                AppState {
+                    name: "updated".into(),
+                    count: 1,
+                }
+            );
+
+            let loaded: AppState = provider.load().unwrap();
+            assert_eq!(loaded, state);
+        }
+
+        #[test]
+        fn update_error_skips_store() {
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+            let original = AppState {
+                name: "original".into(),
+                count: 1,
+            };
+            provider.store(&original).unwrap();
+
+            let err = provider
+                .update(|_s: &mut AppState| Err(Error::NotFound))
+                .unwrap_err();
+            assert!(matches!(err, Error::NotFound));
+
+            let loaded: AppState = provider.load().unwrap();
+            assert_eq!(loaded, original);
+        }
+
+        #[test]
+        fn concurrent_updates_lose_no_writes() {
+            const THREADS: u32 = 4;
+            const PER_THREAD: u32 = 250;
+
+            let dir = tempfile::tempdir().unwrap();
+            let provider = test_provider(dir.path());
+
+            std::thread::scope(|scope| {
+                for _ in 0..THREADS {
+                    let provider = provider.clone();
+                    scope.spawn(move || {
+                        for _ in 0..PER_THREAD {
+                            provider
+                                .update(|s: &mut AppState| {
+                                    s.count += 1;
+                                    Ok(())
+                                })
+                                .unwrap();
+                        }
+                    });
+                }
+            });
+
+            let loaded: AppState = provider.load().unwrap();
+            assert_eq!(loaded.count, THREADS * PER_THREAD);
+        }
     }
 }

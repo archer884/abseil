@@ -17,9 +17,16 @@ Abseil provides a simple API to persist application state to platform-specific d
 
 ## Usage
 
-```rust
+```rust,no_run
 use abseil::Provider;
 
+# use serde::{Deserialize, Serialize};
+#
+# #[derive(Default, Serialize, Deserialize)]
+# struct MyState { count: u32 }
+#
+# let my_state = MyState { count: 1 };
+#
 // Create a provider
 let provider = Provider::builder("my-app").build()?;
 
@@ -31,11 +38,15 @@ let state: MyState = provider.load()?;
 
 // Or load with a default fallback
 let state: MyState = provider.load_or_default()?;
+#
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ### Builder Pattern
 
-```rust
+```rust,no_run
+# use abseil::Provider;
+#
 // Standard platform-specific storage
 let provider = Provider::builder("my-app")
     .with_qualifier("com")
@@ -49,12 +60,58 @@ let provider = Provider::builder("my-app")
 let provider = Provider::builder("my-app")
     .with_path("/custom/storage/path")
     .build()?;
+#
+# Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
 ## Serialization Formats
 
 - **JSON** (default): `serde_json`
 - **TOML**: Enable with `features = ["toml"]` (must disable default JSON feature)
+
+## Concurrent Access
+
+By default, `load()` and `store()` are unsynchronized: two processes sharing a
+storage location can race, and the last write silently wins. The opt-in
+`locking` feature (no additional dependencies, requires Rust 1.89+) adds
+advisory cross-process file locking so cooperating writers can serialize
+load-modify-store cycles:
+
+```rust
+# use abseil::Provider;
+# use serde::{Deserialize, Serialize};
+#
+# #[derive(Default, Serialize, Deserialize)]
+# struct Count { total: u32 }
+#
+# #[cfg(feature = "locking")]
+# fn lock_and_update(provider: &Provider) -> abseil::Result<()> {
+#
+// Atomic read-modify-write under the lock:
+let state: Count = provider.update(|c: &mut Count| {
+    c.total += 1;
+    Ok(())
+})?;
+
+// Or hold a lock guard manually:
+let guard = provider.lock()?;          // or try_lock()? for non-blocking
+let mut state: Count = guard.load_or_default()?;
+state.total += 1;
+guard.store(&state)?;
+#
+# Ok(())
+# }
+#
+# #[cfg(feature = "locking")]
+# {
+#     let dir = tempfile::tempdir().unwrap();
+#     let provider = Provider::builder("my-app").with_path(dir.path()).build().unwrap();
+#     lock_and_update(&provider).unwrap();
+# }
+```
+
+Locks are taken on a sidecar `<filename>.lock` file, released on drop or
+process death, and advisory—writers that don't take the lock are unaffected.
 
 ## Platform Directories
 
