@@ -14,6 +14,7 @@ Abseil provides a simple API to persist application state to platform-specific d
 - **Format support**: JSON (default) or TOML serialization
 - **Legacy support**: Automatic fallback to `persist.json` for backward compatibility
 - **Display**: `Provider` and `Location` implement `Display` for easy path printing
+- **Optional locking**: Advisory cross-process file locking via the opt-in `locking` feature
 
 ## Usage
 
@@ -145,6 +146,7 @@ process death, and advisory—writers that don't take the lock are unaffected.
 - `use_config_dir()` builder method to store in the config directory instead of the data directory.
 - Atomic writes via `tempfile` to prevent corruption on crash.
 - `load()` falls back to legacy `persist.json` for backward compatibility with older versions.
+- Opt-in `locking` feature (0.5.1): advisory cross-process file locking with `lock()`, `try_lock()`, `update()`, and a `ProviderGuard` (see [Concurrent Access](#concurrent-access)).
 
 ## License
 

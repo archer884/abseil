@@ -12,7 +12,9 @@
 ```bash
 cargo check          # Type check without building
 cargo build          # Build the library
-cargo test           # Run tests (14 unit tests)
+cargo test           # Run tests (14 unit tests + 3 README doctests)
+cargo test --features locking          # Also run locking tests (20 unit tests + 4 doctests)
+cargo test --no-default-features --features toml  # Test the TOML backend
 cargo fmt            # Format code
 cargo fmt -- --check # Verify formatting
 cargo clippy         # Lint (if clippy is installed)
@@ -22,7 +24,7 @@ cargo clippy         # Lint (if clippy is installed)
 
 ## Architecture
 
-Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). No binaries, no examples. 13 unit tests inline in `lib.rs`.
+Two-file library: `src/lib.rs` (~850 lines) and `src/location.rs` (~50 lines). No binaries, no examples. Unit tests inline in `lib.rs`: 14 by default, 20 with the `locking` feature. Note: README.md is included as crate docs via `#![doc = include_str!("../README.md")]`, so its Rust code blocks run as doctests—keep them compiling and passing.
 
 ### Core Components
 
@@ -32,11 +34,13 @@ Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). N
    - `store(state)` → Serializes and writes state to storage file
    - `location()` → Returns `&Location` with the resolved storage directory
    - `builder(app)` → Returns `ProviderBuilder` for configuration
+   - `lock()` / `try_lock()` → Acquire exclusive advisory lock returning `ProviderGuard` (`locking` feature only)
+   - `update(f)` → Atomic read-modify-write cycle under the lock (`locking` feature only)
 
-2. **`Location`** (in `location.rs`) - Wraps `ProjectDirs` and `Dir` selection. Implements `Display` (shows path). Public methods:
-   - `path()` → Returns `&Path` to the resolved directory (data_dir or config_dir)
+2. **`Location`** (in `location.rs`) - Wraps a resolved `Root` (platform dirs via `ProjectDirs`, or an explicit path). Implements `Display` (shows path). Public methods:
+   - `path()` → Returns `&Path` to the resolved directory (data_dir, config_dir, or explicit path)
 
-3. **`ProviderBuilder`** - Fluent builder for `Provider`. Owns configuration fields; resolves `Location` at build time. Methods:
+3. **`ProviderBuilder`** - Fluent builder for `Provider`. Owns configuration fields (including a `RootLazy` root selector); resolves `Location` at build time. Methods:
    - `with_qualifier(s)` / `with_organization(s)` → Set reverse-domain qualifiers
    - `pretty()` → Enable pretty-printing (default is compact)
    - `with_filename(s)` → Set custom filename (default is `storage.json` or `storage.toml`)
@@ -44,16 +48,18 @@ Two-file library: `src/lib.rs` (~530 lines) and `src/location.rs` (~50 lines). N
    - `with_path(path)` → Use an explicit directory, bypassing platform-specific resolution entirely
    - `build()` → Resolves `ProjectDirs`, returns `Result<Provider>`
 
-4. **`Abseil<T>`** - Legacy wrapper struct (`pub(crate)`) with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
+4. **`ProviderGuard<'a>`** (`locking` feature only) - RAII guard returned by `lock()`/`try_lock()`. Derefs to `Provider` so load-modify-store cycles run under the lock. Lock lives on a sidecar `<filename>.lock` file, is advisory, and is released on drop or process death. Reentrant acquisition on the same thread blocks indefinitely (deadlocks).
 
-5. **`Error`** - Unified error type: `AppData(String)` | `IO(io::Error)` | `NotFound` | `Serialization(stringify::Error)`
+5. **`Abseil<T>`** - Legacy wrapper struct (`pub(crate)`) with `state: T`. Only used for backward-compatible deserialization of old payloads. Not used during serialization.
 
-6. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
+6. **`Error`** - Unified error type: `AppData(String)` | `IO(io::Error)` | `NotFound` | `Serialization(stringify::Error)`
+
+7. **`stringify` module** - Internal abstraction over serialization formats (see Features below)
 
 ### Module Structure
 
-- **`location.rs`** - Contains `Dir` enum (Config/Data) and `Location` struct
-  - `Dir` is `pub(crate)`
+- **`location.rs`** - Contains `RootLazy`/`Root` enums and the `Location` struct
+  - `RootLazy` (builder-time selector) and `Root` (resolved: `PlatformConfig(ProjectDirs)` | `PlatformData(ProjectDirs)` | `Path(PathBuf)`) are both `pub(crate)`—this replaced the old `Dir` enum
   - `Location` is `pub` with public `path()` method and `Display` impl
 
 ### Serialization Format Abstraction
@@ -71,6 +77,7 @@ The `stringify` module provides a unified interface over JSON and TOML:
 default = ["json"]    # JSON by default
 json = ["dep:serde_json"]
 toml = ["dep:toml"]   # Only works when json is disabled
+locking = []          # Advisory cross-process file locking; no extra deps; needs Rust 1.89+ (stabilized File::lock)
 ```
 
 **Gotcha**: The TOML feature uses `DeserializeOwned` (not `Deserialize<'a>`) due to toml crate requirements. This means the `load<T>()` method's trait bounds change depending on active features.
@@ -79,7 +86,7 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 ### File Storage Location
 - Uses `directories::ProjectDirs` for platform-specific paths
-- `Provider::location()` resolves to `Location` which wraps `ProjectDirs` + `Dir` selection
+- `Provider::location()` resolves to `Location` which wraps `ProjectDirs` + root selection
 - Default is `data_dir()`, but can be configured to use `config_dir()` via `use_config_dir()`
 - Default filename matches format: `storage.json` for JSON, `storage.toml` for TOML (set via `DEFAULT_FILENAME` const)
 - Custom filename can be set via `with_filename()`
@@ -113,7 +120,7 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 2. **Legacy file fallback**: `load()` checks for `persist.json` if the new filename doesn't exist. This provides backward compatibility with older versions. Additionally, if direct deserialization as `T` fails, `load()` retries as `Abseil<T>` for backward compat with wrapped payloads. `store()` always writes `T` directly.
 
-3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `Dir` enum in `location.rs` controls this behavior.
+3. **Dir selection**: Storage uses `data_dir()` by default. Use `use_config_dir()` to store in `config_dir()` instead. The `RootLazy`/`Root` enums in `location.rs` control this behavior.
 
 4. **Feature mutual exclusion**: `toml` feature only activates when `json` is disabled. If both are enabled, JSON wins silently.
 
@@ -121,20 +128,22 @@ toml = ["dep:toml"]   # Only works when json is disabled
 
 6. **Compact by default**: Providers are compact by default. Use `Provider::builder(app).pretty()` for pretty-printed output.
 
-7. **Tests**: 14 unit tests covering roundtrip, backward compat, builder config, and errors. All use `tempfile` to avoid polluting real directories.
+7. **Tests**: 14 unit tests (20 with `locking`) covering roundtrip, backward compat, builder config, errors, and locking (including a multithreaded `update()` race test). All use `tempfile` to avoid polluting real directories. README code blocks run as doctests; the locking example is `#[cfg(feature = "locking")]`-gated so it only runs with that feature enabled.
 
 8. **qualifier/organization are Optional**: `ProjectDirs::from()` receives empty strings for `None` values, not the field names.
+
+9. **Locking is advisory and non-reentrant**: The `locking` feature takes locks on a sidecar `<filename>.lock` file (never replaced by atomic renames, so the lock stays meaningful across writes). Writers that don't take the lock are unaffected. Acquiring the lock reentrantly on the same thread (e.g. calling `update()` or `lock()` while a guard is held) blocks indefinitely. `try_lock()` fails with `io::ErrorKind::WouldBlock` if the lock is held.
 
 ## Conventions
 
 - **Edition**: Rust 2024 (unusual—most crates use 2021)
 - **Error types**: Derive `Debug`, implement `Display` and `std::error::Error`
 - **Builder pattern**: Standalone `ProviderBuilder` struct with consuming self methods; `build()` returns `Result<Provider>`
-- **Module visibility**: `stringify` module is private; `location` module is public but `Dir` is `pub(crate)`; `Abseil` is `pub(crate)`
+- **Module visibility**: `stringify` module is private; `location` module is public but `Root`/`RootLazy` are `pub(crate)`; `Abseil` is `pub(crate)`
 - **Type alias**: `pub type Result<T, E = Error>` for crate-local convenience
 
 ## What's Missing (for contributors)
 
 - No examples directory
 - No CI/CD configuration
-- No MSRV (minimum supported Rust version) policy
+- No MSRV (minimum supported Rust version) policy—no `rust-version` in Cargo.toml, though the `locking` feature requires Rust 1.89+
